@@ -1,0 +1,21 @@
+{
+  "name": "agent8-container-agent",
+  "module": "index.ts",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --watch index.ts",
+    "build": "bun build index.ts --outdir ./dist",
+    "start": "bun run dist/index.js",
+    "test": "bun test",
+    "test:integration": "bun test tests/integration",
+    "check": "biome check --fix --unsafe .",
+    "check-all": "bun check && bun test && bunx tsc --noEmit"
+  },
+  "dependencies": {
+    "zod": "^3.24.3"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "1.9.4",
+    "bun-types": "^1.2.10"
+  }
+}
