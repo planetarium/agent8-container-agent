@@ -4,8 +4,9 @@ node_modules
 # output
 out
 dist
-workspace
 *.tgz
+workspace
+test-workspace
 
 # code coverage
 coverage
