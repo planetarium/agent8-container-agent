@@ -23,71 +23,71 @@ describe("Container Server Integration Tests", () => {
   test("filesystem operations", async () => {
     // Test file write
     const writeResponse = await client.send({
-      type: "filesystem",
+      type: "writeFile",
       operation: {
-        type: "write",
+        type: "writeFile",
         path: "/test.txt",
         content: "Hello, World!",
       },
     });
-    expect(writeResponse.response.success).toBe(true);
+    expect(writeResponse.success).toBe(true);
 
     // Test file read
-    const readResponse = await client.send({
-      type: "filesystem",
+    const readResponse = (await client.send({
+      type: "readFile",
       operation: {
-        type: "read",
+        type: "readFile",
         path: "/test.txt",
       },
-    });
-    expect(readResponse.response.success).toBe(true);
-    expect(readResponse.response.data).toBe("Hello, World!");
+    })) as ContainerResponse<{ content: string }>;
+    expect(readResponse.success).toBe(true);
+    expect(readResponse.data?.content).toBe("Hello, World!");
 
     // Test file delete
     const deleteResponse = await client.send({
-      type: "filesystem",
+      type: "rm",
       operation: {
-        type: "delete",
+        type: "rm",
         path: "/test.txt",
       },
     });
-    expect(deleteResponse.response.success).toBe(true);
+    expect(deleteResponse.success).toBe(true);
   });
 
   test("terminal operations", async () => {
     // Test process spawn
     const spawnResponse = (await client.send({
-      type: "terminal",
+      type: "spawn",
       operation: {
         type: "spawn",
         command: "node",
         args: ["-e", "console.log('Hello, World!')"],
       },
-    })) as { response: ContainerResponse<ProcessResponse> };
-    expect(spawnResponse.response.success).toBe(true);
-    expect(spawnResponse.response.data?.pid).toBeDefined();
+    })) as ContainerResponse<ProcessResponse>;
+    expect(spawnResponse.success).toBe(true);
+    expect(spawnResponse.data?.pid).toBeDefined();
 
-    const pid = spawnResponse.response.data?.pid;
+    const pid = spawnResponse.data?.pid;
 
     // Test process input
     const inputResponse = await client.send({
-      type: "terminal",
+      type: "input",
       operation: {
         type: "input",
         pid,
         data: "Hello\n",
       },
     });
-    expect(inputResponse.response.success).toBe(true);
+    expect(inputResponse.success).toBe(true);
 
     // Test process kill
     const killResponse = await client.send({
-      type: "terminal",
+      type: "kill",
       operation: {
         type: "kill",
         pid,
       },
     });
-    expect(killResponse.response.success).toBe(true);
+    expect(killResponse.success).toBe(true);
   });
 });

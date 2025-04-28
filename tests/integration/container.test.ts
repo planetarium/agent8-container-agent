@@ -6,22 +6,9 @@ import { ContainerAgentImpl } from "../../src/container-agent-impl.ts";
 
 async function buildContainer(): Promise<boolean> {
   return new Promise((resolve, reject) => {
-    const build = spawn(
-      "docker",
-      [
-        "build",
-        "-f",
-        "Containerfile",
-        "-t",
-        "container-agent-test",
-        "--cache-from",
-        "container-agent-test",
-        ".",
-      ],
-      {
-        stdio: "inherit",
-      },
-    );
+    const build = spawn("docker", ["build", "-f", "Containerfile", "."], {
+      stdio: "inherit",
+    });
     build.on("close", (code) => {
       if (code === 0) {
         resolve(true);

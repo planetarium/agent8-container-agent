@@ -15,9 +15,9 @@ export class TestClient {
     });
   }
 
-  async send(message: Omit<ClientMessage, "messageId">): Promise<ServerMessage> {
-    const messageId = (this.messageId++).toString();
-    const fullMessage: ClientMessage = { ...message, messageId };
+  async send(message: Omit<ClientMessage, "id">): Promise<ServerMessage> {
+    const id = (this.messageId++).toString();
+    const fullMessage: ClientMessage = { ...message, id };
 
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
@@ -26,7 +26,7 @@ export class TestClient {
 
       const handler = (event: MessageEvent) => {
         const response = JSON.parse(event.data) as ServerMessage;
-        if (response.messageId === messageId) {
+        if (response.id === id) {
           clearTimeout(timeout);
           this.ws.removeEventListener("message", handler);
           resolve(response);

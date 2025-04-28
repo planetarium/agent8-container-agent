@@ -1,10 +1,11 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import type { FSWatcher as NodeFileSystemWatcher, Stats } from "node:fs";
+import type { Dirent, FSWatcher as NodeFileSystemWatcher, Stats } from "node:fs";
 import { mkdir, readFile, readdir, rm, stat, watch, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Server, ServerWebSocket } from "bun";
 import type {
   AuthOperation,
+  BufferEncoding,
   ContainerRequest,
   ContainerResponse,
   FileSystemOperation,
@@ -26,19 +27,6 @@ declare const Bun: {
     };
   }): Server;
 };
-
-type BufferEncoding =
-  | "ascii"
-  | "utf8"
-  | "utf-8"
-  | "utf16le"
-  | "ucs2"
-  | "ucs-2"
-  | "base64"
-  | "base64url"
-  | "latin1"
-  | "binary"
-  | "hex";
 
 export class ContainerServer {
   private readonly server: Server;
@@ -63,6 +51,8 @@ export class ContainerServer {
     this.processes = new Map();
     this.watchers = new Map();
     this.previewPorts = new Map();
+
+    console.info("Starting server on port", config.port);
 
     this.server = Bun.serve({
       port: config.port,
@@ -89,25 +79,40 @@ export class ContainerServer {
     message: string | Buffer,
   ): Promise<void> {
     try {
-      const { type, messageId, operation } = JSON.parse(message.toString()) as {
-        type: string;
-        messageId: string;
+      const { id, operation } = JSON.parse(message.toString()) as {
+        id: string;
         operation: ContainerRequest;
       };
+
+      console.info(message);
+
+      const { type } = operation;
 
       let response: ContainerResponse<unknown>;
 
       switch (type) {
-        case "filesystem":
+        case "readFile":
+        case "writeFile":
+        case "rm":
+        case "readdir":
+        case "mkdir":
+        case "stat":
+        case "watch":
           response = await this.handleFileSystemOperation(operation as FileSystemOperation);
           break;
-        case "terminal":
+        case "spawn":
+        case "input":
+        case "kill":
+        case "resize":
           response = await this.handleProcessOperation(operation as ProcessOperation);
           break;
-        case "preview":
+        case "server-ready":
+        case "port":
+        case "preview-message":
           response = this.handlePreviewOperation(operation as PreviewOperation);
           break;
-        case "watch":
+        case "watch-paths":
+        case "stop":
           response = await this.handleWatchOperation(operation as WatchOperation);
           break;
         case "auth":
@@ -124,22 +129,18 @@ export class ContainerServer {
       }
 
       const serverMessage: ServerMessage = {
-        type,
-        messageId,
-        response,
+        id,
+        ...response,
       };
 
       ws.send(JSON.stringify(serverMessage));
     } catch (error) {
       const errorResponse: ServerMessage = {
-        type: "error",
-        messageId: "",
-        response: {
-          success: false,
-          error: {
-            code: "INTERNAL_ERROR",
-            message: error instanceof Error ? error.message : "Unknown error",
-          },
+        id: "",
+        success: false,
+        error: {
+          code: "INTERNAL_ERROR",
+          message: error instanceof Error ? error.message : "Unknown error",
         },
       };
       ws.send(JSON.stringify(errorResponse));
@@ -148,18 +149,20 @@ export class ContainerServer {
 
   private async handleFileSystemOperation(
     operation: FileSystemOperation,
-  ): Promise<ContainerResponse<string | string[] | Stats | null>> {
-    const fullPath = join(this.config.workdirName, operation.path);
+  ): Promise<ContainerResponse<{ content: string } | { entries: Dirent[] } | Stats | null>> {
+    const fullPath = operation.path.startsWith(this.config.workdirName)
+      ? operation.path
+      : join(this.config.workdirName, operation.path);
 
     try {
       switch (operation.type) {
-        case "read": {
-          const data = await readFile(fullPath, {
+        case "readFile": {
+          const content = await readFile(fullPath, {
             encoding: (operation.options?.encoding as BufferEncoding) || "utf-8",
           });
-          return { success: true, data };
+          return { success: true, data: { content } };
         }
-        case "write": {
+        case "writeFile": {
           if (!operation.content) {
             throw new Error("Content is required for write operation");
           }
@@ -168,15 +171,15 @@ export class ContainerServer {
           });
           return { success: true, data: null };
         }
-        case "delete": {
+        case "rm": {
           await rm(fullPath, {
             recursive: operation.options?.recursive,
           });
           return { success: true, data: null };
         }
-        case "list": {
-          const files = await readdir(fullPath);
-          return { success: true, data: files };
+        case "readdir": {
+          const files = await readdir(fullPath, { withFileTypes: true });
+          return { success: true, data: { entries: files } };
         }
         case "mkdir": {
           await mkdir(fullPath, {

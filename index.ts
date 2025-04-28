@@ -1,11 +1,10 @@
-import { join } from "node:path";
 import { ContainerServer } from "@/server";
 import { ContainerConfigSchema } from "@/types";
 
 function main() {
   const config = ContainerConfigSchema.parse({
     port: 3000,
-    workdirName: join(process.cwd(), "workspace"),
+    workdirName: "/workspace",
     coep: "credentialless",
     forwardPreviewErrors: true,
   });

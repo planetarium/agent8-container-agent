@@ -17,6 +17,8 @@ COPY --from=builder /app/package.json ./
 
 RUN bun install --production --frozen-lockfile
 
+WORKDIR /workspace
+
 EXPOSE 3000
 
-ENTRYPOINT ["bun", "dist/index.js"]
+ENTRYPOINT ["bun", "/app/dist/index.js"]

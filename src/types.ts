@@ -4,6 +4,19 @@ import type { Stats } from "node:fs";
 import type { Readable } from "node:stream";
 import { z } from "zod";
 
+export type BufferEncoding =
+  | "ascii"
+  | "utf8"
+  | "utf-8"
+  | "utf16le"
+  | "ucs2"
+  | "ucs-2"
+  | "base64"
+  | "base64url"
+  | "latin1"
+  | "binary"
+  | "hex";
+
 // Event listener types
 export type Unsubscribe = () => void;
 export type PortListener = (port: number) => void;
@@ -117,29 +130,33 @@ export type ContainerConfigType = z.infer<typeof ContainerConfigSchema>;
 
 // Message types for client-server communication
 export interface ClientMessage {
-  type: "filesystem" | "terminal" | "preview" | "watch" | "auth";
-  messageId: string;
+  type:
+    | (typeof FileSystemOperationTypes)[number]
+    | (typeof ProcessOperationTypes)[number]
+    | (typeof PreviewOperationTypes)[number]
+    | (typeof WatchOperationTypes)[number]
+    | (typeof AuthOperationTypes)[number];
+  id: string;
   operation: ContainerRequest;
 }
 
-export interface ServerMessage {
-  type: string;
-  messageId: string;
-  response: ContainerResponse<unknown>;
+export interface ServerMessage extends ContainerResponse<unknown> {
+  id: string;
 }
+
+export const FileSystemOperationTypes = [
+  "readFile",
+  "writeFile",
+  "rm",
+  "readdir",
+  "mkdir",
+  "stat",
+  "watch",
+] as const;
 
 // Operation types
 export type FileSystemOperation = {
-  type:
-    | "readFile"
-    | "writeFile"
-    | "read"
-    | "write"
-    | "delete"
-    | "list"
-    | "mkdir"
-    | "stat"
-    | "watch";
+  type: (typeof FileSystemOperationTypes)[number];
   path: string;
   content?: string;
   options?: {
@@ -153,8 +170,10 @@ export type FileSystemOperation = {
   };
 };
 
+export const ProcessOperationTypes = ["spawn", "input", "kill", "resize"] as const;
+
 export type ProcessOperation = {
-  type: "spawn" | "input" | "kill" | "resize";
+  type: (typeof ProcessOperationTypes)[number];
   command?: string;
   args?: string[];
   data?: string;
@@ -164,8 +183,10 @@ export type ProcessOperation = {
   rows?: number;
 };
 
+export const PreviewOperationTypes = ["server-ready", "port", "preview-message"] as const;
+
 export type PreviewOperation = {
-  type: "server-ready" | "port" | "preview-message";
+  type: (typeof PreviewOperationTypes)[number];
   data?: {
     port?: number;
     previewId?: string;
@@ -173,8 +194,10 @@ export type PreviewOperation = {
   };
 };
 
+export const WatchOperationTypes = ["watch-paths", "stop"] as const;
+
 export type WatchOperation = {
-  type: "watch-paths" | "stop";
+  type: (typeof WatchOperationTypes)[number];
   path?: string;
   patterns?: string[];
   options?: {
@@ -182,8 +205,10 @@ export type WatchOperation = {
   };
 };
 
+export const AuthOperationTypes = ["auth", "login", "logout"] as const;
+
 export type AuthOperation = {
-  type: "auth" | "login" | "logout";
+  type: (typeof AuthOperationTypes)[number];
   token?: string;
 };
 

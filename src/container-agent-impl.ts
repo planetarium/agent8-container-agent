@@ -2,6 +2,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { promises as fs, type FSWatcher as NodeFileSystemWatcher } from "node:fs";
 import { join } from "node:path";
 import type {
+  BufferEncoding,
   Container,
   ContainerConfigType as ContainerConfig,
   ContainerProcess,
@@ -17,19 +18,6 @@ import type {
   WatchCallback,
   WatchOptions,
 } from "./types.ts";
-
-type BufferEncoding =
-  | "ascii"
-  | "utf8"
-  | "utf-8"
-  | "utf16le"
-  | "ucs2"
-  | "ucs-2"
-  | "base64"
-  | "base64url"
-  | "latin1"
-  | "binary"
-  | "hex";
 
 export class ContainerAgentImpl implements Container {
   private readonly processes: Map<number, ChildProcess> = new Map();

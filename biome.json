@@ -13,6 +13,14 @@
       "all": true,
       "correctness": {
         "noNodejsModules": "off"
+      },
+      "suspicious": {
+        "noConsole": {
+          "level": "warn",
+          "options": {
+            "allow": ["info", "warn", "error"]
+          }
+        }
       }
     }
   }
