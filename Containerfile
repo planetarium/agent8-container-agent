@@ -11,7 +11,7 @@ RUN bun run build
 FROM oven/bun:1.2.10-slim
 
 # install zsh
-RUN apt-get update && apt-get install -y zsh bsdutils && apt-get clean
+RUN apt-get update && apt-get install -y zsh && apt-get clean
 
 # copy .zshrc
 COPY .zshrc /root/.zshrc
