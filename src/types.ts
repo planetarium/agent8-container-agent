@@ -223,3 +223,8 @@ export type ContainerRequest =
 export interface FileSystemWatcher {
   close(): void;
 }
+
+export interface ProxyData {
+  targetUrl?: string;
+  targetSocket?: WebSocket;
+}

@@ -12,9 +12,11 @@ import type {
   PreviewOperation,
   ProcessOperation,
   ProcessResponse,
+  ProxyData,
   ServerMessage,
   WatchOperation,
 } from "./types.ts";
+import { getMachineIPMap } from "./fly.ts";
 
 declare const Bun: {
   serve(options: {
@@ -22,7 +24,7 @@ declare const Bun: {
     fetch: (req: Request, server: Server) => Response | Promise<Response> | undefined;
     websocket: {
       message: (ws: ServerWebSocket<unknown>, message: string | Buffer) => void;
-      open?: (ws: ServerWebSocket<unknown>) => void;
+      open?: (ws: ServerWebSocket<ProxyData>) => void;
       close?: (ws: ServerWebSocket<unknown>) => void;
     };
   }): Server;
@@ -57,15 +59,57 @@ export class ContainerServer {
     this.server = Bun.serve({
       port: config.port,
       fetch: (req, server) => {
-        if (server.upgrade(req)) {
+        const { pathname } = new URL(req.url);
+
+        if (pathname.startsWith("/proxy/")) {
+          const machinemap = getMachineIPMap();
+          const [, , target, ...rest] = pathname.split("/");
+          const isPreview = rest[0] == "preview";
+          const targetUrl = isPreview ?
+          `http://[${machinemap[target]}]:5174/${rest.slice(1).join("/")}` :
+          `ws://[${machinemap[target]}]:3000/${rest.join("/")}`;
+
+          if (server.upgrade(req, { data: { targetUrl } })) return;
+          else if (isPreview) {
+            const proxiedResponse = fetch(targetUrl, {
+              method: req.method,
+              headers: req.headers,
+              body: req.body,
+            });
+            return proxiedResponse;
+          }
+        }
+        else if (server.upgrade(req)) {
           return;
         }
         return new Response("Upgrade failed", { status: 400 });
       },
       websocket: {
         message: (ws: ServerWebSocket<unknown>, message) => this.handleMessage(ws, message),
-        open: () => {
+        open: (ws: ServerWebSocket<ProxyData>) => {
           // WebSocket connection opened - no action needed
+          const targetUrl = ws.data?.targetUrl;
+          if (!targetUrl) {
+            return;
+          }
+    
+          const targetSocket = new WebSocket(targetUrl);
+          ws.data.targetSocket = targetSocket;
+    
+          targetSocket.onmessage = (ev) => {
+            console.log(ev)
+            if (typeof ev.data === "string") ws.send(ev.data);
+            else if (ev.data instanceof Uint8Array) ws.send(ev.data);
+          };
+    
+          targetSocket.onclose = (e) => {
+            console.log(e)
+            ws.close();
+          }
+          targetSocket.onerror = (e) => {
+            console.log(e)
+            ws.close();
+          }
         },
         close: () => {
           // WebSocket connection closed - no action needed
