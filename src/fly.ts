@@ -1,30 +1,32 @@
+import process from "node:process";
+
 interface Machine {
-    id: string;
-    private_ip?: string;
-  }
-  
-  interface MachineMap {
-    [id: string]: string;
-  }
+  id: string;
+  // biome-ignore lint/style/useNamingConvention: https://fly.io/docs/machines/api/machines-resource/#machine-properties
+  private_ip?: string;
+}
 
-const port = process.env.PORT || 3000;
-const FLY_API_TOKEN = process.env.FLY_API_TOKEN;
-const FLY_APP_NAME = process.env.FLY_APP_NAME;
+interface MachineMap {
+  [id: string]: string;
+}
 
-  
-let machineIPMap: MachineMap = {};
+const { FLY_API_TOKEN, FLY_APP_NAME } = process.env;
 
-export function getMachineIPMap() {
-    return machineIPMap;
+let machineIpMap: MachineMap = {};
+
+export function getMachineIpMap() {
+  return machineIpMap;
 }
 
 export async function updateMachineMap(): Promise<void> {
   try {
     const res = await fetch(`https://api.machines.dev/v1/apps/${FLY_APP_NAME}/machines`, {
-      method: 'GET',
+      method: "GET",
       headers: {
+        // biome-ignore lint/style/useNamingConvention: HTTP Header
         Authorization: `Bearer ${FLY_API_TOKEN}`,
-        Accept: 'application/json',
+        // biome-ignore lint/style/useNamingConvention: HTTP Header
+        Accept: "application/json",
       },
     });
 
@@ -33,14 +35,10 @@ export async function updateMachineMap(): Promise<void> {
     }
 
     const machines: Machine[] = await res.json();
-    machineIPMap = {};
-
-    machines.forEach((m) => {
-      if (m.private_ip) {
-        machineIPMap[m.id] = m.private_ip;
-      }
-    });
-  } catch (e: any) {
-    console.error('Fly API error:', e.message);
+    machineIpMap = Object.fromEntries(
+      machines.flatMap((m) => (m.private_ip ? [[m.id, m.private_ip]] : [])),
+    );
+  } catch (e: unknown) {
+    console.error("Fly API error:", e instanceof Error ? e.message : e);
   }
 }
