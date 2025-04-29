@@ -2,7 +2,9 @@ import { type ChildProcess, spawn } from "node:child_process";
 import type { Dirent, FSWatcher as NodeFileSystemWatcher, Stats } from "node:fs";
 import { mkdir, readFile, readdir, rm, stat, watch, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import process from "node:process";
 import type { Server, ServerWebSocket } from "bun";
+import { getMachineIpMap } from "./fly.ts";
 import type {
   AuthOperation,
   BufferEncoding,
@@ -12,6 +14,7 @@ import type {
   PreviewOperation,
   ProcessOperation,
   ProcessResponse,
+  ProxyData,
   ServerMessage,
   WatchOperation,
 } from "./types.ts";
@@ -22,7 +25,7 @@ declare const Bun: {
     fetch: (req: Request, server: Server) => Response | Promise<Response> | undefined;
     websocket: {
       message: (ws: ServerWebSocket<unknown>, message: string | Buffer) => void;
-      open?: (ws: ServerWebSocket<unknown>) => void;
+      open?: (ws: ServerWebSocket<ProxyData>) => void;
       close?: (ws: ServerWebSocket<unknown>) => void;
     };
   }): Server;
@@ -57,15 +60,56 @@ export class ContainerServer {
     this.server = Bun.serve({
       port: config.port,
       fetch: (req, server) => {
-        if (server.upgrade(req)) {
+        const { pathname } = new URL(req.url);
+
+        if (pathname.startsWith("/proxy/")) {
+          const machinemap = getMachineIpMap();
+          const [, , target, ...rest] = pathname.split("/");
+          const isPreview = rest[0] === "preview";
+          const targetUrl = isPreview
+            ? `http://[${machinemap[target]}]:5174/${rest.slice(1).join("/")}`
+            : `ws://[${machinemap[target]}]:3000/${rest.join("/")}`;
+
+          if (server.upgrade(req, { data: { targetUrl } })) {
+            return;
+          }
+          if (isPreview) {
+            const proxiedResponse = fetch(targetUrl, {
+              method: req.method,
+              headers: req.headers,
+              body: req.body,
+            });
+            return proxiedResponse;
+          }
+        } else if (server.upgrade(req)) {
           return;
         }
         return new Response("Upgrade failed", { status: 400 });
       },
       websocket: {
         message: (ws: ServerWebSocket<unknown>, message) => this.handleMessage(ws, message),
-        open: () => {
+        open: (ws: ServerWebSocket<ProxyData>) => {
           // WebSocket connection opened - no action needed
+          const targetUrl = ws.data?.targetUrl;
+          if (!targetUrl) {
+            return;
+          }
+
+          const targetSocket = new WebSocket(targetUrl);
+          ws.data.targetSocket = targetSocket;
+
+          targetSocket.onmessage = (ev) => {
+            console.debug(ev);
+            if (typeof ev.data === "string" || ev.data instanceof Uint8Array) {
+              ws.send(ev.data);
+            }
+          };
+          targetSocket.onclose = () => {
+            ws.close();
+          };
+          targetSocket.onerror = () => {
+            ws.close();
+          };
         },
         close: () => {
           // WebSocket connection closed - no action needed
@@ -84,7 +128,7 @@ export class ContainerServer {
         operation: ContainerRequest;
       };
 
-      console.info(message);
+      console.debug(message);
 
       const { type } = operation;
 
