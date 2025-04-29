@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
-import { ContainerAgentImpl } from "../../src/container-agent-impl.ts";
+import process from "node:process";
+import { ContainerAgentImpl } from "@/container-agent-impl.ts";
 
 async function buildContainer(): Promise<boolean> {
   return new Promise((resolve, reject) => {

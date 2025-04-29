@@ -1,5 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import process from "node:process";
 import type { ContainerConfigType as ContainerConfig } from "@/types";
 
 export const testConfig: ContainerConfig = {

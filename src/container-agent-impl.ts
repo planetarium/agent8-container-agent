@@ -1,6 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { promises as fs, type FSWatcher as NodeFileSystemWatcher } from "node:fs";
 import { join } from "node:path";
+import process from "node:process";
 import type {
   BufferEncoding,
   Container,
