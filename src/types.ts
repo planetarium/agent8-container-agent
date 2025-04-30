@@ -140,8 +140,14 @@ export interface ClientMessage {
   operation: ContainerRequest;
 }
 
-export interface ServerMessage extends ContainerResponse<unknown> {
+export type ServerMessage = ServerResponse | ServerEvent;
+
+export interface ServerResponse extends ContainerResponse<unknown> {
   id: string;
+}
+
+export interface ServerEvent extends ContainerResponse<unknown> {
+  event: "file-change" | "server-ready" | "port" | "preview-message" | "error";
 }
 
 export const FileSystemOperationTypes = [

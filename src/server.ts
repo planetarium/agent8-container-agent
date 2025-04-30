@@ -18,6 +18,8 @@ import type {
   ServerMessage,
   WatchOperation,
   DirectConnectionData,
+  ServerResponse,
+  ServerEvent,
 } from "./types.ts";
 
 
@@ -208,14 +210,14 @@ export class ContainerServer {
           };
       }
 
-      const serverMessage: ServerMessage = {
+      const serverResponse: ServerResponse = {
         id,
         ...response,
       };
 
-      ws.send(JSON.stringify(serverMessage));
+      ws.send(JSON.stringify(serverResponse));
     } catch (error) {
-      const errorResponse: ServerMessage = {
+      const errorResponse: ServerResponse = {
         id: "",
         success: false,
         error: {
@@ -608,15 +610,14 @@ export class ContainerServer {
     if (!clients || clients.size === 0) return;
 
     // Create change notification message
-    const changeMessage: ServerMessage = {
-      id: `watch-${Date.now()}`,
-      success: true,
+    const changeMessage: ServerEvent = {
+      event: "file-change",
       data: {
-        type: "file-change",
         path: watchPath,
         eventType,
         filename
-      }
+      },
+      success: true,
     };
 
     // Send change notification to all clients watching this path
