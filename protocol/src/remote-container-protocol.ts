@@ -57,14 +57,16 @@ export type FileSystemEventHandler = (eventType: string, filename: string) => vo
 // Request and response types
 export interface ContainerRequest {
   id: string;
-  operation:
-    | FileSystemOperation
-    | ProcessOperation
-    | PreviewOperation
-    | WatchOperation
-    | WatchPathsOperation
-    | AuthOperation;
+  operation: ContainerOperation;
 }
+
+export type ContainerOperation =
+  | FileSystemOperation
+  | ProcessOperation
+  | PreviewOperation
+  | WatchOperation
+  | WatchPathsOperation
+  | AuthOperation;
 
 export interface ContainerResponse<T = any> {
   success: boolean;
@@ -73,6 +75,16 @@ export interface ContainerResponse<T = any> {
     code: string;
     message: string;
   };
+}
+
+export interface ContainerResponseWithId<T = unknown> extends ContainerResponse<T> {
+  id: string;
+}
+
+export interface ContainerEventMessage<T = unknown> {
+  id: string;
+  event: string;
+  data: T;
 }
 
 // Operation type definitions
@@ -100,9 +112,13 @@ export interface ProcessOperation {
 }
 
 export interface ProcessResponse {
-  success: boolean;
   pid: number;
-  process: any;
+}
+
+export interface ProcessEventMessage {
+  pid: number;
+  stream: string;
+  data: string;
 }
 
 export interface PreviewOperation {
@@ -183,4 +199,18 @@ export interface ShellSession {
 
   executeCommand?(command: string): Promise<ExecutionResult>;
   waitTillOscCode?(code: string): Promise<{ output: string; exitCode: number }>;
+}
+
+export interface FileNode {
+  file: {
+    contents: string;
+  };
+}
+
+export interface DirectoryNode {
+  directory: FileSystemTree;
+}
+
+export interface FileSystemTree {
+  [name: string]: FileNode | DirectoryNode;
 }

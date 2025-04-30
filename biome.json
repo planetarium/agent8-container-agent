@@ -4,6 +4,9 @@
     "enabled": true,
     "clientKind": "git"
   },
+  "files": {
+    "ignore": ["protocol"]
+  },
   "formatter": {
     "useEditorconfig": true
   },
