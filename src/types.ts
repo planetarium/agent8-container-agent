@@ -170,7 +170,6 @@ export type FileSystemOperation = {
     encoding?: string;
     watchOptions?: {
       persistent?: boolean;
-      recursive?: boolean;
       encoding?: string;
     };
   };
@@ -208,6 +207,8 @@ export type WatchOperation = {
   patterns?: string[];
   options?: {
     recursive?: boolean;
+    ignoreInitial?: boolean;
+    persistent?: boolean;
   };
 };
 
@@ -238,5 +239,3 @@ export interface ProxyData {
 export interface DirectConnectionData {
   wsId: string;
 }
-
-
