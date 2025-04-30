@@ -1,6 +1,7 @@
 import process from "node:process";
 import { ContainerServer } from "@/server";
 import { ContainerConfigSchema } from "@/types";
+import { updateMachineMap } from "@/fly";
 
 function main() {
   const config = ContainerConfigSchema.parse({
@@ -11,6 +12,7 @@ function main() {
   });
 
   const server = new ContainerServer(config);
+  updateMachineMap();
 
   try {
     // Handle shutdown gracefully
