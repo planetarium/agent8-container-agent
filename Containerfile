@@ -24,6 +24,12 @@ COPY --from=builder /app/preview.ts ./
 
 RUN bun install --production --frozen-lockfile
 
+# Set default environment variables
+ENV PORT=3000 \
+    WORKDIR_NAME=/workspace \
+    COEP=credentialless \
+    FORWARD_PREVIEW_ERRORS=true
+
 WORKDIR /workspace
 
 EXPOSE 3000
