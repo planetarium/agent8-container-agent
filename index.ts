@@ -2,13 +2,17 @@ import process from "node:process";
 import { ContainerServer } from "@/server";
 import { ContainerConfigSchema } from "@/types";
 import { updateMachineMap } from "@/fly";
+import dotenv from "dotenv";
+
+// Load environment variables from .env file
+dotenv.config();
 
 function main() {
   const config = ContainerConfigSchema.parse({
-    port: 3000,
-    workdirName: "/workspace",
-    coep: "credentialless",
-    forwardPreviewErrors: true,
+    port: parseInt(process.env.PORT || "3000", 10),
+    workdirName: process.env.WORKDIR_NAME || "/workspace",
+    coep: process.env.COEP || "credentialless",
+    forwardPreviewErrors: process.env.FORWARD_PREVIEW_ERRORS === "true",
   });
 
   const server = new ContainerServer(config);

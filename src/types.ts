@@ -140,8 +140,14 @@ export interface ClientMessage {
   operation: ContainerRequest;
 }
 
-export interface ServerMessage extends ContainerResponse<unknown> {
+export type ServerMessage = ServerResponse | ServerEvent;
+
+export interface ServerResponse extends ContainerResponse<unknown> {
   id: string;
+}
+
+export interface ServerEvent extends ContainerResponse<unknown> {
+  event: "file-change" | "server-ready" | "port" | "preview-message" | "error";
 }
 
 export const FileSystemOperationTypes = [
@@ -194,7 +200,7 @@ export type PreviewOperation = {
   };
 };
 
-export const WatchOperationTypes = ["watch-paths", "stop"] as const;
+export const WatchOperationTypes = ["watch-paths"] as const;
 
 export type WatchOperation = {
   type: (typeof WatchOperationTypes)[number];
@@ -225,6 +231,12 @@ export interface FileSystemWatcher {
 }
 
 export interface ProxyData {
-  targetUrl?: string;
+  targetUrl: string;
   targetSocket?: WebSocket;
 }
+
+export interface DirectConnectionData {
+  wsId: string;
+}
+
+
