@@ -200,7 +200,7 @@ export type PreviewOperation = {
   };
 };
 
-export const WatchOperationTypes = ["watch-paths", "stop"] as const;
+export const WatchOperationTypes = ["watch-paths"] as const;
 
 export type WatchOperation = {
   type: (typeof WatchOperationTypes)[number];

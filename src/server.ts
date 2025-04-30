@@ -194,7 +194,6 @@ export class ContainerServer {
           response = this.handlePreviewOperation(operation as PreviewOperation);
           break;
         case "watch-paths":
-        case "stop":
           response = await this.handleWatchOperation(operation as WatchOperation, ws);
           break;
         case "auth":
@@ -405,16 +404,6 @@ export class ContainerServer {
           success: true,
           data: { watcher: watcherId },
         };
-      } else if (operation.type === "stop") {
-        // Handle stopping a watch
-        if (this.fileSystemWatchers.has(fullPath)) {
-          // Abort the watcher for this path
-          this.fileSystemWatchers.get(fullPath)?.abort();
-          this.fileSystemWatchers.delete(fullPath);
-
-          // Remove all clients for this path
-          this.fileWatchClients.delete(fullPath);
-        }
       }
 
       return {
