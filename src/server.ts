@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import type { Dirent, FSWatcher as NodeFileSystemWatcher, Stats } from "node:fs";
+import type { Dirent, Stats } from "node:fs";
 import { mkdir, readFile, readdir, rm, stat, watch, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
@@ -17,16 +17,29 @@ import type {
   ProxyData,
   ServerMessage,
   WatchOperation,
+  DirectConnectionData,
 } from "./types.ts";
+
+
+type WebSocketData = ProxyData | DirectConnectionData;
+
+// Type guards
+function isProxyConnection(data: any): data is ProxyData {
+  return data && 'targetUrl' in data;
+}
+
+function isDirectConnection(data: any): data is DirectConnectionData {
+  return data && 'wsId' in data;
+}
 
 declare const Bun: {
   serve(options: {
     port: number;
     fetch: (req: Request, server: Server) => Response | Promise<Response> | undefined;
     websocket: {
-      message: (ws: ServerWebSocket<unknown>, message: string | Buffer) => void;
-      open?: (ws: ServerWebSocket<ProxyData>) => void;
-      close?: (ws: ServerWebSocket<unknown>) => void;
+      message: (ws: ServerWebSocket<WebSocketData>, message: string | Buffer) => void;
+      open?: (ws: ServerWebSocket<WebSocketData>) => void;
+      close?: (ws: ServerWebSocket<WebSocketData>) => void;
     };
   }): Server;
 };
@@ -34,8 +47,10 @@ declare const Bun: {
 export class ContainerServer {
   private readonly server: Server;
   private readonly processes: Map<number, ChildProcess>;
-  private readonly watchers: Map<string, NodeFileSystemWatcher>;
+  private readonly fileSystemWatchers: Map<string, AbortController>;
   private readonly previewPorts: Map<string, number>;
+  private readonly fileWatchClients: Map<string, Set<ServerWebSocket<unknown>>>;
+  private readonly activeWs: Map<string, ServerWebSocket<WebSocketData>>;
   private readonly config: {
     port: number;
     workdirName: string;
@@ -52,8 +67,10 @@ export class ContainerServer {
   }) {
     this.config = config;
     this.processes = new Map();
-    this.watchers = new Map();
+    this.fileSystemWatchers = new Map();
     this.previewPorts = new Map();
+    this.fileWatchClients = new Map();
+    this.activeWs = new Map();
 
     console.info("Starting server on port", config.port);
 
@@ -81,45 +98,64 @@ export class ContainerServer {
             });
             return proxiedResponse;
           }
-        } else if (server.upgrade(req)) {
+        } else if (server.upgrade(req, {
+          data: {
+            wsId: Math.random().toString(36).substring(7)
+          }
+        })) {
           return;
         }
         return new Response("Upgrade failed", { status: 400 });
       },
       websocket: {
-        message: (ws: ServerWebSocket<unknown>, message) => this.handleMessage(ws, message),
-        open: (ws: ServerWebSocket<ProxyData>) => {
-          // WebSocket connection opened - no action needed
-          const targetUrl = ws.data?.targetUrl;
-          if (!targetUrl) {
-            return;
+        message: (ws: ServerWebSocket<WebSocketData>, message) => this.handleMessage(ws, message),
+        open: (ws: ServerWebSocket<WebSocketData>) => {
+          // WebSocket connection opened
+          // Register websocket based on its type
+          if (isDirectConnection(ws.data)) {
+            this.activeWs.set(ws.data.wsId, ws);
+          } else if (isProxyConnection(ws.data)) {
+            const targetUrl = ws.data.targetUrl;
+            const targetSocket = new WebSocket(targetUrl);
+            ws.data.targetSocket = targetSocket;
+
+            targetSocket.onmessage = (ev) => {
+              console.debug(ev);
+              if (typeof ev.data === "string" || ev.data instanceof Uint8Array) {
+                ws.send(ev.data);
+              }
+            };
+            targetSocket.onclose = () => {
+              ws.close();
+            };
+            targetSocket.onerror = () => {
+              ws.close();
+            };
           }
-
-          const targetSocket = new WebSocket(targetUrl);
-          ws.data.targetSocket = targetSocket;
-
-          targetSocket.onmessage = (ev) => {
-            console.debug(ev);
-            if (typeof ev.data === "string" || ev.data instanceof Uint8Array) {
-              ws.send(ev.data);
-            }
-          };
-          targetSocket.onclose = () => {
-            ws.close();
-          };
-          targetSocket.onerror = () => {
-            ws.close();
-          };
         },
-        close: () => {
-          // WebSocket connection closed - no action needed
+        close: (ws: ServerWebSocket<WebSocketData>) => {
+          // Remove client from all watch lists
+          const data = ws.data;
+
+          if (isDirectConnection(data)) {
+            this.activeWs.delete(data.wsId);
+
+            // Remove from all watch clients
+            for (const [path, clients] of this.fileWatchClients.entries()) {
+              clients.delete(ws);
+
+              if (clients.size === 0) {
+                this.fileWatchClients.delete(path);
+              }
+            }
+          }
         },
       },
     });
   }
 
   private async handleMessage(
-    ws: ServerWebSocket<unknown>,
+    ws: ServerWebSocket<WebSocketData>,
     message: string | Buffer,
   ): Promise<void> {
     try {
@@ -142,7 +178,7 @@ export class ContainerServer {
         case "mkdir":
         case "stat":
         case "watch":
-          response = await this.handleFileSystemOperation(operation as FileSystemOperation);
+          response = await this.handleFileSystemOperation(operation as FileSystemOperation, ws);
           break;
         case "spawn":
         case "input":
@@ -157,7 +193,7 @@ export class ContainerServer {
           break;
         case "watch-paths":
         case "stop":
-          response = await this.handleWatchOperation(operation as WatchOperation);
+          response = await this.handleWatchOperation(operation as WatchOperation, ws);
           break;
         case "auth":
           response = this.handleAuthOperation(operation as AuthOperation);
@@ -193,6 +229,7 @@ export class ContainerServer {
 
   private async handleFileSystemOperation(
     operation: FileSystemOperation,
+    ws: ServerWebSocket<WebSocketData>,
   ): Promise<ContainerResponse<{ content: string } | { entries: Dirent[] } | Stats | null>> {
     const fullPath = operation.path.startsWith(this.config.workdirName)
       ? operation.path
@@ -236,15 +273,21 @@ export class ContainerServer {
           return { success: true, data: stats };
         }
         case "watch": {
-          if (this.watchers.has(fullPath)) {
-            this.watchers.get(fullPath)?.close();
-          }
-          const watcher = watch(fullPath, {
+          const abortController = await this.watchFiles(fullPath, {
             persistent: operation.options?.watchOptions?.persistent,
             recursive: operation.options?.watchOptions?.recursive,
             encoding: (operation.options?.watchOptions?.encoding as BufferEncoding) || "utf-8",
           });
-          this.watchers.set(fullPath, watcher as unknown as NodeFileSystemWatcher);
+
+          if (this.fileSystemWatchers.has(fullPath)) {
+            this.fileSystemWatchers.get(fullPath)?.abort();
+          }
+
+          this.fileSystemWatchers.set(fullPath, abortController);
+
+          // Register this client to receive notifications for this path
+          this.registerWatchClient(fullPath, ws);
+
           return { success: true, data: null };
         }
         default:
@@ -339,34 +382,51 @@ export class ContainerServer {
     }
   }
 
-  private handleWatchOperation(
+  private async handleWatchOperation(
     operation: WatchOperation,
+    ws: ServerWebSocket<WebSocketData>,
   ): Promise<ContainerResponse<{ watcher: string }>> {
     try {
       const watcherId = Math.random().toString(36).substring(7);
       const path = operation.path || ".";
+      const fullPath = join(this.config.workdirName, path);
 
       if (operation.type === "watch-paths") {
-        // Create watcher but don't store it since it's not used
-        this.watchFiles(path, operation.options || {});
-        return Promise.resolve({
+        // Create watcher and store it
+        const abortController = await this.watchFiles(fullPath, operation.options || {});
+        this.fileSystemWatchers.set(fullPath, abortController);
+
+        // Register this client to receive notifications for this path
+        this.registerWatchClient(fullPath, ws);
+
+        return {
           success: true,
           data: { watcher: watcherId },
-        });
+        };
+      } else if (operation.type === "stop") {
+        // Handle stopping a watch
+        if (this.fileSystemWatchers.has(fullPath)) {
+          // Abort the watcher for this path
+          this.fileSystemWatchers.get(fullPath)?.abort();
+          this.fileSystemWatchers.delete(fullPath);
+
+          // Remove all clients for this path
+          this.fileWatchClients.delete(fullPath);
+        }
       }
 
-      return Promise.resolve({
+      return {
         success: true,
         data: { watcher: watcherId },
-      });
+      };
     } catch (error) {
-      return Promise.resolve({
+      return {
         success: false,
         error: {
           code: "WATCH_OPERATION_FAILED",
           message: error instanceof Error ? error.message : "Unknown error occurred",
         },
-      });
+      };
     }
   }
 
@@ -399,10 +459,7 @@ export class ContainerServer {
     }
 
     // Cleanup watchers
-    for (const [path, watcher] of this.watchers.entries()) {
-      watcher.close();
-      this.watchers.delete(path);
-    }
+    this.cleanup();
 
     // Close the server
     this.server.stop();
@@ -506,20 +563,83 @@ export class ContainerServer {
     return { success: true, data: null };
   }
 
-  private watchFiles(path: string, options: { recursive?: boolean }): NodeFileSystemWatcher {
-    const fullPath = join(this.config.workdirName, path);
-    const watcher = watch(fullPath, {
-      persistent: true,
+  private async watchFiles(
+    path: string,
+    options: { persistent?: boolean; recursive?: boolean; encoding?: BufferEncoding }
+  ): Promise<AbortController> {
+    const abortController = new AbortController();
+    const signal = abortController.signal;
+
+    const watcher = watch(path, {
+      signal,
+      persistent: options.persistent ?? true,
       recursive: options.recursive,
-      encoding: "utf-8",
+      encoding: options.encoding || "utf-8",
     });
-    return watcher as unknown as NodeFileSystemWatcher;
+
+    // Start the watcher processing in a separate background task
+    this.startWatcherProcessing(watcher, path);
+
+    return abortController;
+  }
+
+  private async startWatcherProcessing(
+    watcher: AsyncIterable<{ eventType: string; filename: string | null }>,
+    path: string
+  ): Promise<void> {
+    try {
+      for await (const event of watcher) {
+        // Notify all clients about the file change
+        this.notifyFileChange(path, event.eventType, event.filename);
+      }
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        console.debug(`Watcher for ${path} aborted`);
+        return;
+      } else {
+        console.error(`Error watching ${path}:`, error);
+      }
+    }
+  }
+
+  private notifyFileChange(watchPath: string, eventType: string, filename: string | null): void {
+    const clients = this.fileWatchClients.get(watchPath);
+
+    if (!clients || clients.size === 0) return;
+
+    // Create change notification message
+    const changeMessage: ServerMessage = {
+      id: `watch-${Date.now()}`,
+      success: true,
+      data: {
+        type: "file-change",
+        path: watchPath,
+        eventType,
+        filename
+      }
+    };
+
+    // Send change notification to all clients watching this path
+    for (const client of clients) {
+      client.send(JSON.stringify(changeMessage));
+    }
+  }
+
+  private registerWatchClient(path: string, ws: ServerWebSocket<unknown>): void {
+    const clients = this.fileWatchClients.get(path);
+    if (!clients) {
+      this.fileWatchClients.set(path, new Set([ws]));
+    } else {
+      clients.add(ws);
+    }
   }
 
   private cleanup() {
-    for (const watcher of this.watchers.values()) {
-      watcher.close();
+    // Abort all watchers
+    for (const abortController of this.fileSystemWatchers.values()) {
+      abortController.abort();
     }
-    this.watchers.clear();
+    this.fileSystemWatchers.clear();
+    this.fileWatchClients.clear();
   }
 }

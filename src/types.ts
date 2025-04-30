@@ -225,6 +225,12 @@ export interface FileSystemWatcher {
 }
 
 export interface ProxyData {
-  targetUrl?: string;
+  targetUrl: string;
   targetSocket?: WebSocket;
 }
+
+export interface DirectConnectionData {
+  wsId: string;
+}
+
+
