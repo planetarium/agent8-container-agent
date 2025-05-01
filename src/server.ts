@@ -183,10 +183,8 @@ export class ContainerServer {
         case "readdir":
         case "mkdir":
         case "mount":
-          response = await this.handleFileSystemOperation(operation as FileSystemOperation);
-          break;
         case "stat":
-          response = await this.handleStatOperation(operation);
+          response = await this.handleFileSystemOperation(operation as FileSystemOperation);
           break;
         case "spawn":
         case "input":
@@ -238,7 +236,7 @@ export class ContainerServer {
 
   private async handleFileSystemOperation(
     operation: FileSystemOperation,
-  ): Promise<ContainerResponse<{ content: string } | { entries: Dirent[] } | null>> {
+  ): Promise<ContainerResponse<{ content: string } | { entries: Dirent[] } | Stats | null>> {
     try {
       const path = operation.path || '';
       const fullPath = path.startsWith(this.config.workdirName)
@@ -280,6 +278,10 @@ export class ContainerServer {
           });
           return { success: true, data: null };
         }
+        case "stat": {
+          const stats = await stat(fullPath);
+          return { success: true, data: stats };
+        }
         case "mount": {
           let content = operation.content;
           if (!content) {
@@ -298,29 +300,6 @@ export class ContainerServer {
         default:
           throw new Error(`Unsupported file system operation: ${operation.type}`);
       }
-    } catch (error) {
-      console.error('error', error);
-      return {
-        success: false,
-        error: {
-          code: "FILESYSTEM_OPERATION_FAILED",
-          message: error instanceof Error ? error.message : "Unknown error occurred",
-        },
-      };
-    }
-  }
-
-  private async handleStatOperation(
-    operation: any
-  ): Promise<ContainerResponse<Stats>> {
-    try {
-      const path = operation.path || '';
-      const fullPath = path.startsWith(this.config.workdirName)
-        ? path
-        : join(this.config.workdirName, path);
-
-      const stats = await stat(fullPath);
-      return { success: true, data: stats };
     } catch (error) {
       console.error('error', error);
       return {

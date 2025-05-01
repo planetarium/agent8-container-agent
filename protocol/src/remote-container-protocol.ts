@@ -77,7 +77,7 @@ export interface ContainerResponse<T = any> {
 
 // Operation type definitions
 export interface FileSystemOperation {
-  type: 'readFile' | 'writeFile' | 'mkdir' | 'readdir' | 'rm' | 'mount';
+  type: 'readFile' | 'writeFile' | 'mkdir' | 'readdir' | 'rm' | 'mount' | 'stat';
   path?: string;
   content?: string | Uint8Array;
   options?: {
