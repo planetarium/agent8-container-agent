@@ -157,7 +157,6 @@ export const FileSystemOperationTypes = [
   "readdir",
   "mkdir",
   "stat",
-  "watch",
 ] as const;
 
 // Operation types
@@ -168,10 +167,6 @@ export type FileSystemOperation = {
   options?: {
     recursive?: boolean;
     encoding?: string;
-    watchOptions?: {
-      persistent?: boolean;
-      encoding?: string;
-    };
   };
 };
 
@@ -199,13 +194,13 @@ export type PreviewOperation = {
   };
 };
 
-export const WatchOperationTypes = ["watch-paths"] as const;
+export const WatchOperationTypes = ["watch", "watch-paths"] as const;
 
 export type WatchOperation = {
   type: (typeof WatchOperationTypes)[number];
   path?: string;
-  patterns?: string[];
   options?: {
+    patterns?: string[];
     recursive?: boolean;
     ignoreInitial?: boolean;
     persistent?: boolean;

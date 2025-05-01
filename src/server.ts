@@ -3,6 +3,7 @@ import type { Dirent, Stats } from "node:fs";
 import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
+import { glob } from "node:fs/promises";
 import type { Server, ServerWebSocket } from "bun";
 import chokidar, { FSWatcher } from "chokidar";
 import { getMachineIpMap } from "./fly.ts";
@@ -123,7 +124,6 @@ export class ContainerServer {
             ws.data.targetSocket = targetSocket;
 
             targetSocket.onmessage = (ev) => {
-              console.debug(ev);
               if (typeof ev.data === "string" || ev.data instanceof Uint8Array) {
                 ws.send(ev.data);
               }
@@ -180,8 +180,7 @@ export class ContainerServer {
         case "readdir":
         case "mkdir":
         case "stat":
-        case "watch":
-          response = await this.handleFileSystemOperation(operation as FileSystemOperation, ws);
+          response = await this.handleFileSystemOperation(operation as FileSystemOperation);
           break;
         case "spawn":
         case "input":
@@ -194,6 +193,7 @@ export class ContainerServer {
         case "preview-message":
           response = this.handlePreviewOperation(operation as PreviewOperation);
           break;
+        case "watch":
         case "watch-paths":
           response = await this.handleWatchOperation(operation as WatchOperation, ws);
           break;
@@ -217,6 +217,7 @@ export class ContainerServer {
 
       ws.send(JSON.stringify(serverResponse));
     } catch (error) {
+      console.error('error', error);
       const errorResponse: ServerResponse = {
         id: "",
         success: false,
@@ -231,13 +232,12 @@ export class ContainerServer {
 
   private async handleFileSystemOperation(
     operation: FileSystemOperation,
-    ws: ServerWebSocket<WebSocketData>,
   ): Promise<ContainerResponse<{ content: string } | { entries: Dirent[] } | Stats | null>> {
-    const fullPath = operation.path.startsWith(this.config.workdirName)
+    try {
+      const fullPath = operation.path.startsWith(this.config.workdirName)
       ? operation.path
       : join(this.config.workdirName, operation.path);
 
-    try {
       switch (operation.type) {
         case "readFile": {
           const content = await readFile(fullPath, {
@@ -274,28 +274,11 @@ export class ContainerServer {
           const stats = await stat(fullPath);
           return { success: true, data: stats };
         }
-        case "watch": {
-          const fsWatcher = this.watchFiles(fullPath, {
-            persistent: operation.options?.watchOptions?.persistent,
-            recursive: operation.options?.watchOptions?.recursive,
-            encoding: (operation.options?.watchOptions?.encoding as BufferEncoding) || "utf-8",
-          });
-
-          if (this.fileSystemWatchers.has(fullPath)) {
-            this.fileSystemWatchers.get(fullPath)?.close();
-          }
-
-          this.fileSystemWatchers.set(fullPath, fsWatcher);
-
-          // Register this client to receive notifications for this path
-          this.registerWatchClient(fullPath, ws);
-
-          return { success: true, data: null };
-        }
         default:
           throw new Error(`Unsupported file system operation: ${operation.type}`);
       }
     } catch (error) {
+      console.error('error', error);
       return {
         success: false,
         error: {
@@ -341,6 +324,7 @@ export class ContainerServer {
           throw new Error(`Unsupported process operation type: ${operation.type}`);
       }
     } catch (error) {
+      console.error('error', error);
       return Promise.resolve({
         success: false,
         error: {
@@ -374,6 +358,7 @@ export class ContainerServer {
           throw new Error(`Unsupported preview operation: ${type}`);
       }
     } catch (error) {
+      console.error('error', error);
       return {
         success: false,
         error: {
@@ -393,27 +378,18 @@ export class ContainerServer {
       const path = operation.path || ".";
       const fullPath = join(this.config.workdirName, path);
 
-      if (operation.type === "watch-paths") {
-        // Support for pattern-based watching
-        if (operation.patterns && operation.patterns.length > 0) {
-          // Watch each pattern
-          for (const pattern of operation.patterns) {
-            const patternPath = join(this.config.workdirName, pattern);
-            const fsWatcher = this.watchFiles(patternPath, operation.options || {});
-            this.fileSystemWatchers.set(patternPath, fsWatcher);
-            this.registerWatchClient(patternPath, ws);
-          }
-        } else {
-          // Watch a single path
-          const fsWatcher = this.watchFiles(fullPath, operation.options || {});
-          this.fileSystemWatchers.set(fullPath, fsWatcher);
-          this.registerWatchClient(fullPath, ws);
+      if (operation.options?.patterns && operation.options.patterns.length > 0) {
+        // Watch each pattern
+        for (const pattern of operation.options.patterns) {
+          const fsWatcher = await this.watchFiles(pattern, operation.options || {});
+          this.fileSystemWatchers.set(pattern, fsWatcher);
+          this.registerWatchClient(pattern, ws);
         }
-
-        return {
-          success: true,
-          data: { watcher: watcherId },
-        };
+      } else {
+        // Watch a single path
+        const fsWatcher = await this.watchFiles(fullPath, operation.options || {});
+        this.fileSystemWatchers.set(fullPath, fsWatcher);
+        this.registerWatchClient(fullPath, ws);
       }
 
       return {
@@ -421,6 +397,7 @@ export class ContainerServer {
         data: { watcher: watcherId },
       };
     } catch (error) {
+      console.error('error', error);
       return {
         success: false,
         error: {
@@ -564,29 +541,26 @@ export class ContainerServer {
     return { success: true, data: null };
   }
 
-  private watchFiles(
-    path: string,
-    options: { persistent?: boolean; recursive?: boolean; encoding?: BufferEncoding },
-  ): FSWatcher {
-    // Use chokidar for all file watching operations
-    const watcher = chokidar.watch(path, {
+  private async watchFiles(
+    pattern: string,
+    options: { persistent?: boolean },
+  ): Promise<FSWatcher> {
+    const files = await Array.fromAsync(glob(pattern, { cwd: this.config.workdirName }));
+    const watcher = chokidar.watch(files, {
       persistent: options.persistent ?? true,
       ignoreInitial: true,
+      cwd: this.config.workdirName,
       awaitWriteFinish: {
         stabilityThreshold: 300,
         pollInterval: 100,
       },
     });
 
-    // Register event handlers
     watcher.on("all", (eventName, filePath) => {
-      // Convert chokidar event type to Node.js fs.watch events
       const eventType = this.mapChokidarEventToNodeEvent(eventName);
-      // Extract filename from the full path
       const filename = filePath.replace(`${this.config.workdirName}/`, "");
 
-      // Notify about file changes
-      this.notifyFileChange(path, eventType, filename);
+      this.notifyFileChange(pattern, eventType, filename);
     });
 
     return watcher;
@@ -628,12 +602,12 @@ export class ContainerServer {
     }
   }
 
-  private registerWatchClient(path: string, ws: ServerWebSocket<unknown>): void {
-    const clients = this.fileWatchClients.get(path);
+  private registerWatchClient(pattern: string, ws: ServerWebSocket<unknown>): void {
+    const clients = this.fileWatchClients.get(pattern);
     if (clients) {
       clients.add(ws);
     } else {
-      this.fileWatchClients.set(path, new Set([ws]));
+      this.fileWatchClients.set(pattern, new Set([ws]));
     }
   }
 
