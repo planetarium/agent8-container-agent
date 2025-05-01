@@ -14,6 +14,7 @@ import type {
   ContainerResponse,
   DirectConnectionData,
   FileSystemOperation,
+  FileSystemTree,
   PreviewOperation,
   ProcessOperation,
   ProcessResponse,
@@ -180,6 +181,7 @@ export class ContainerServer {
         case "readdir":
         case "mkdir":
         case "stat":
+        case "mount":
           response = await this.handleFileSystemOperation(operation as FileSystemOperation);
           break;
         case "spawn":
@@ -273,6 +275,12 @@ export class ContainerServer {
         case "stat": {
           const stats = await stat(fullPath);
           return { success: true, data: stats };
+        }
+        case "mount": {
+          const tree = JSON.parse(operation.content || "{}") as FileSystemTree;
+
+          await mount(fullPath, tree);
+          return { success: true, data: null };
         }
         default:
           throw new Error(`Unsupported file system operation: ${operation.type}`);
@@ -618,5 +626,20 @@ export class ContainerServer {
     }
     this.fileSystemWatchers.clear();
     this.fileWatchClients.clear();
+  }
+}
+
+async function mount(mountPath: string, tree: FileSystemTree) {
+  await mkdir(mountPath, { recursive: true });
+
+  for (const [name, item] of Object.entries(tree)) {
+    const fullPath = join(mountPath, name);
+
+    if ('file' in item) {
+      await writeFile(fullPath, item.file.contents);
+    }
+    else if ('directory' in item) {
+      await mount(fullPath, item.directory);
+    }
   }
 }
