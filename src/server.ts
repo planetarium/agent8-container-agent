@@ -7,21 +7,23 @@ import { glob } from "node:fs/promises";
 import type { Server, ServerWebSocket } from "bun";
 import chokidar, { FSWatcher } from "chokidar";
 import { getMachineIpMap } from "./fly.ts";
-import type {
+import {
   AuthOperation,
   BufferEncoding,
   ContainerRequest,
   ContainerResponse,
-  DirectConnectionData,
   FileSystemOperation,
-  FileSystemTree,
   PreviewOperation,
   ProcessOperation,
   ProcessResponse,
+  WatchOperation,
+} from "../protocol/src";
+import type {
+  DirectConnectionData,
+  FileSystemTree,
   ProxyData,
   ServerEvent,
   ServerResponse,
-  WatchOperation,
 } from "./types.ts";
 
 type WebSocketData = ProxyData | DirectConnectionData;
@@ -165,7 +167,7 @@ export class ContainerServer {
     try {
       const { id, operation } = JSON.parse(message.toString()) as {
         id: string;
-        operation: ContainerRequest;
+        operation: any;
       };
 
       console.debug(message);
@@ -180,9 +182,11 @@ export class ContainerServer {
         case "rm":
         case "readdir":
         case "mkdir":
-        case "stat":
         case "mount":
           response = await this.handleFileSystemOperation(operation as FileSystemOperation);
+          break;
+        case "stat":
+          response = await this.handleStatOperation(operation);
           break;
         case "spawn":
         case "input":
@@ -197,7 +201,7 @@ export class ContainerServer {
           break;
         case "watch":
         case "watch-paths":
-          response = await this.handleWatchOperation(operation as WatchOperation, ws);
+          response = await this.handleWatchOperation(operation, ws);
           break;
         case "auth":
           response = this.handleAuthOperation(operation as AuthOperation);
@@ -234,24 +238,28 @@ export class ContainerServer {
 
   private async handleFileSystemOperation(
     operation: FileSystemOperation,
-  ): Promise<ContainerResponse<{ content: string } | { entries: Dirent[] } | Stats | null>> {
+  ): Promise<ContainerResponse<{ content: string } | { entries: Dirent[] } | null>> {
     try {
-      const fullPath = operation.path.startsWith(this.config.workdirName)
-      ? operation.path
-      : join(this.config.workdirName, operation.path);
+      const path = operation.path || '';
+      const fullPath = path.startsWith(this.config.workdirName)
+        ? path
+        : join(this.config.workdirName, path);
 
       switch (operation.type) {
         case "readFile": {
           const content = await readFile(fullPath, {
             encoding: (operation.options?.encoding as BufferEncoding) || "utf-8",
           });
-          return { success: true, data: { content } };
+          return { success: true, data: { content: content.toString() } };
         }
         case "writeFile": {
           if (!operation.content) {
             throw new Error("Content is required for write operation");
           }
-          await writeFile(fullPath, operation.content, {
+          const content = typeof operation.content === 'string'
+            ? operation.content
+            : new TextDecoder().decode(operation.content);
+          await writeFile(fullPath, content, {
             encoding: (operation.options?.encoding as BufferEncoding) || "utf-8",
           });
           return { success: true, data: null };
@@ -272,12 +280,17 @@ export class ContainerServer {
           });
           return { success: true, data: null };
         }
-        case "stat": {
-          const stats = await stat(fullPath);
-          return { success: true, data: stats };
-        }
         case "mount": {
-          const tree = JSON.parse(operation.content || "{}") as FileSystemTree;
+          let content = operation.content;
+          if (!content) {
+            throw new Error("Content is required for mount operation");
+          }
+
+          if (typeof content !== 'string') {
+            content = new TextDecoder().decode(content);
+          }
+
+          const tree = JSON.parse(content) as FileSystemTree;
 
           await mount(fullPath, tree);
           return { success: true, data: null };
@@ -285,6 +298,29 @@ export class ContainerServer {
         default:
           throw new Error(`Unsupported file system operation: ${operation.type}`);
       }
+    } catch (error) {
+      console.error('error', error);
+      return {
+        success: false,
+        error: {
+          code: "FILESYSTEM_OPERATION_FAILED",
+          message: error instanceof Error ? error.message : "Unknown error occurred",
+        },
+      };
+    }
+  }
+
+  private async handleStatOperation(
+    operation: any
+  ): Promise<ContainerResponse<Stats>> {
+    try {
+      const path = operation.path || '';
+      const fullPath = path.startsWith(this.config.workdirName)
+        ? path
+        : join(this.config.workdirName, path);
+
+      const stats = await stat(fullPath);
+      return { success: true, data: stats };
     } catch (error) {
       console.error('error', error);
       return {
@@ -378,15 +414,26 @@ export class ContainerServer {
   }
 
   private async handleWatchOperation(
-    operation: WatchOperation,
+    operation: any,
     ws: ServerWebSocket<WebSocketData>,
   ): Promise<ContainerResponse<{ watcher: string }>> {
     try {
       const watcherId = Math.random().toString(36).substring(7);
-      const path = operation.path || ".";
+      const path = operation.path || '.';
       const fullPath = join(this.config.workdirName, path);
 
-      if (operation.options?.patterns && operation.options.patterns.length > 0) {
+      if (operation.type === 'watch-paths') {
+        // Handle watch-paths operation
+        const options = operation.options || {};
+        if (options.include && options.include.length > 0) {
+          // Watch included patterns
+          for (const pattern of options.include) {
+            const fsWatcher = await this.watchFiles(pattern, { persistent: true });
+            this.fileSystemWatchers.set(pattern, fsWatcher);
+            this.registerWatchClient(pattern, ws);
+          }
+        }
+      } else if (operation.options?.patterns && operation.options.patterns.length > 0) {
         // Watch each pattern
         for (const pattern of operation.options.patterns) {
           const fsWatcher = await this.watchFiles(pattern, operation.options || {});

@@ -3,19 +3,19 @@ import type { FSWatcher as NodeFileSystemWatcher } from "node:fs";
 import type { Stats } from "node:fs";
 import type { Readable } from "node:stream";
 import { z } from "zod";
-
-export type BufferEncoding =
-  | "ascii"
-  | "utf8"
-  | "utf-8"
-  | "utf16le"
-  | "ucs2"
-  | "ucs-2"
-  | "base64"
-  | "base64url"
-  | "latin1"
-  | "binary"
-  | "hex";
+import {
+  BufferEncoding,
+  ContainerProcess,
+  ContainerRequest,
+  ContainerResponse,
+  ProcessOperation,
+  ProcessResponse,
+  FileSystemOperation,
+  PreviewOperation,
+  WatchOperation,
+  AuthOperation,
+  SpawnOptions
+} from "../protocol/src";
 
 // Event listener types
 export type Unsubscribe = () => void;
@@ -44,43 +44,6 @@ export interface FileSystem {
   mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
   stat(path: string): Promise<Stats>;
   watch(pattern: string, options?: { persistent?: boolean }): NodeFileSystemWatcher;
-}
-
-// Container process interface
-export interface ContainerProcess {
-  input: {
-    getWriter(): WritableStreamDefaultWriter<string>;
-  };
-  output: ReadableStream<string>;
-  exit: Promise<number>;
-  resize(dimensions: { cols: number; rows: number }): void;
-}
-
-// Response types
-export interface ContainerResponse<T = void> {
-  success: boolean;
-  data?: T;
-  error?: {
-    code: string;
-    message: string;
-  };
-}
-
-export interface ProcessResponse {
-  success: boolean;
-  pid?: number;
-  process?: ContainerProcess;
-  stdout?: Readable;
-  stderr?: Readable;
-  error?: {
-    code: string;
-    message: string;
-  };
-}
-
-// Container process options
-export interface SpawnOptions {
-  env?: Record<string, string>;
 }
 
 // Container interface
@@ -171,67 +134,13 @@ export const FileSystemOperationTypes = [
   "mount",
 ] as const;
 
-// Operation types
-export type FileSystemOperation = {
-  type: (typeof FileSystemOperationTypes)[number];
-  path: string;
-  content?: string;
-  options?: {
-    recursive?: boolean;
-    encoding?: string;
-  };
-};
-
 export const ProcessOperationTypes = ["spawn", "input", "kill", "resize"] as const;
-
-export type ProcessOperation = {
-  type: (typeof ProcessOperationTypes)[number];
-  command?: string;
-  args?: string[];
-  data?: string;
-  input?: string;
-  pid?: number;
-  cols?: number;
-  rows?: number;
-};
 
 export const PreviewOperationTypes = ["server-ready", "port", "preview-message"] as const;
 
-export type PreviewOperation = {
-  type: (typeof PreviewOperationTypes)[number];
-  data?: {
-    port?: number;
-    previewId?: string;
-    error?: string;
-  };
-};
-
 export const WatchOperationTypes = ["watch", "watch-paths"] as const;
 
-export type WatchOperation = {
-  type: (typeof WatchOperationTypes)[number];
-  path?: string;
-  options?: {
-    patterns?: string[];
-    recursive?: boolean;
-    ignoreInitial?: boolean;
-    persistent?: boolean;
-  };
-};
-
 export const AuthOperationTypes = ["auth", "login", "logout"] as const;
-
-export type AuthOperation = {
-  type: (typeof AuthOperationTypes)[number];
-  token?: string;
-};
-
-export type ContainerRequest =
-  | FileSystemOperation
-  | ProcessOperation
-  | PreviewOperation
-  | WatchOperation
-  | AuthOperation;
 
 // Bun's FileSystemWatcher type
 export interface FileSystemWatcher {
