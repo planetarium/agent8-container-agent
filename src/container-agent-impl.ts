@@ -10,6 +10,8 @@ import type {
   ErrorListener,
   FileSystem,
   FileSystemTree,
+  FileNode,
+  DirectoryNode,
   PathWatcherEvent,
   PortListener,
   PreviewMessage,
@@ -120,13 +122,14 @@ export class ContainerAgentImpl implements Container {
 
   async mount(data: FileSystemTree): Promise<void> {
     const writeFiles = async (tree: FileSystemTree, basePath = "") => {
-      for (const [name, content] of Object.entries(tree)) {
+      for (const [name, node] of Object.entries(tree)) {
         const path = join(basePath, name);
-        if (typeof content === "string") {
-          await this.fs.writeFile(path, content);
-        } else {
+
+        if ('file' in node) {
+          await this.fs.writeFile(path, node.file.contents);
+        } else if ('directory' in node) {
           await this.fs.mkdir(path, { recursive: true });
-          await writeFiles(content, path);
+          await writeFiles(node.directory, path);
         }
       }
     };

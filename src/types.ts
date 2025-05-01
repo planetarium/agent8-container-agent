@@ -99,9 +99,20 @@ export interface Container {
 }
 
 // File system types
-export type FileSystemTree = {
-  [key: string]: string | FileSystemTree;
-};
+export interface FileNode {
+  file: {
+    contents: string;
+  };
+}
+
+export interface DirectoryNode {
+  directory: FileSystemTree;
+}
+
+export interface FileSystemTree {
+  [name: string]: FileNode | DirectoryNode;
+}
+
 export type FileSystemResult = string | Buffer | NodeFileSystemWatcher | Stats;
 
 // Watch types
@@ -157,6 +168,7 @@ export const FileSystemOperationTypes = [
   "readdir",
   "mkdir",
   "stat",
+  "mount",
 ] as const;
 
 // Operation types
