@@ -18,6 +18,8 @@ import type {
   ProcessEventMessage,
   ProcessOperation,
   ProcessResponse,
+  WatchOperation,
+  WatchPathsOperation,
 } from "../protocol/src/index.ts";
 import { getMachineIpMap } from "./fly.ts";
 import type { DirectConnectionData, ProxyData } from "./types.ts";
@@ -222,7 +224,7 @@ export class ContainerServer {
   ): Promise<ContainerResponse<{ content: string } | { entries: Dirent[] } | Stats | null>> {
     try {
       const path = operation.path || "";
-      const fullPath = this.ensureSafePath(join(this.config.workdirName, path));
+      const fullPath = ensureSafePath(this.config.workdirName, path);
 
       switch (operation.type) {
         case "readFile": {
@@ -376,14 +378,11 @@ export class ContainerServer {
   }
 
   private async handleWatchOperation(
-    //biome-ignore lint/suspicious/noExplicitAny: to be fixed
-    operation: any,
+    operation: WatchOperation | WatchPathsOperation,
     ws: ServerWebSocket<WebSocketData>,
   ): Promise<ContainerResponse<{ watcher: string }>> {
     try {
       const watcherId = Math.random().toString(36).substring(7);
-      const path = operation.path || ".";
-      const fullPath = this.ensureSafePath(join(this.config.workdirName, path));
 
       if (operation.type === "watch-paths") {
         // Handle watch-paths operation
@@ -396,18 +395,12 @@ export class ContainerServer {
             this.registerWatchClient(pattern, ws);
           }
         }
-      } else if (operation.options?.patterns && operation.options.patterns.length > 0) {
-        // Watch each pattern
-        for (const pattern of operation.options.patterns) {
+      } else {
+        for (const pattern of operation.options?.patterns || []) {
           const fsWatcher = await this.watchFiles(pattern, operation.options || {});
           this.fileSystemWatchers.set(pattern, fsWatcher);
           this.registerWatchClient(pattern, ws);
         }
-      } else {
-        // Watch a single path
-        const fsWatcher = await this.watchFiles(fullPath, operation.options || {});
-        this.fileSystemWatchers.set(fullPath, fsWatcher);
-        this.registerWatchClient(fullPath, ws);
       }
 
       return {
@@ -644,30 +637,25 @@ export class ContainerServer {
     this.fileWatchClients.clear();
     this.processClients.clear();
   }
+}
 
-  /**
-   * Ensures paths are safe and contained within the workspace
-   * @param userPath User-provided path that might contain path traversal attempts
-   * @returns A safe path guaranteed to be within the workspace directory
-   */
-  private ensureSafePath(userPath: string): string {
-    const normalizedPath = normalize(join(this.config.workdirName, userPath));
-    const normalizedWorkdir = normalize(this.config.workdirName);
+export function ensureSafePath(workdir: string, userPath: string): string {
+  const normalizedPath = normalize(join(workdir, userPath));
+  const normalizedWorkdir = normalize(workdir);
 
-    // Check if the path is within the workspace directory
-    if (normalizedPath.startsWith(normalizedWorkdir)) {
-      return normalizedPath;
-    }
-
-    // Remove dangerous path components and keep the path within workspace
-    return join(
-      normalizedWorkdir,
-      userPath
-        .split(/[\/\\]/)
-        .filter((segment) => segment !== "..")
-        .join("/"),
-    );
+  // Check if the path is within the workspace directory
+  if (normalizedPath.startsWith(normalizedWorkdir)) {
+    return normalizedPath;
   }
+
+  // Remove dangerous path components and keep the path within workspace
+  return join(
+    normalizedWorkdir,
+    userPath
+      .split(/[\/\\]/)
+      .filter((segment) => segment !== "..")
+      .join("/"),
+  );
 }
 
 async function mount(mountPath: string, tree: FileSystemTree) {
