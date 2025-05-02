@@ -18,6 +18,8 @@ import type {
   ProcessEventMessage,
   ProcessOperation,
   ProcessResponse,
+  WatchOperation,
+  WatchPathsOperation,
 } from "../protocol/src/index.ts";
 import { getMachineIpMap } from "./fly.ts";
 import type { DirectConnectionData, ProxyData } from "./types.ts";
@@ -376,14 +378,11 @@ export class ContainerServer {
   }
 
   private async handleWatchOperation(
-    //biome-ignore lint/suspicious/noExplicitAny: to be fixed
-    operation: any,
+    operation: WatchOperation | WatchPathsOperation,
     ws: ServerWebSocket<WebSocketData>,
   ): Promise<ContainerResponse<{ watcher: string }>> {
     try {
       const watcherId = Math.random().toString(36).substring(7);
-      const path = operation.path || ".";
-      const fullPath = this.ensureSafePath(join(this.config.workdirName, path));
 
       if (operation.type === "watch-paths") {
         // Handle watch-paths operation
@@ -396,18 +395,12 @@ export class ContainerServer {
             this.registerWatchClient(pattern, ws);
           }
         }
-      } else if (operation.options?.patterns && operation.options.patterns.length > 0) {
-        // Watch each pattern
-        for (const pattern of operation.options.patterns) {
+      } else {
+        for (const pattern of operation.options?.patterns || []) {
           const fsWatcher = await this.watchFiles(pattern, operation.options || {});
           this.fileSystemWatchers.set(pattern, fsWatcher);
           this.registerWatchClient(pattern, ws);
         }
-      } else {
-        // Watch a single path
-        const fsWatcher = await this.watchFiles(fullPath, operation.options || {});
-        this.fileSystemWatchers.set(fullPath, fsWatcher);
-        this.registerWatchClient(fullPath, ws);
       }
 
       return {
