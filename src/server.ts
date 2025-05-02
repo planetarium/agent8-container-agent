@@ -10,13 +10,11 @@ import { getMachineIpMap } from "./fly.ts";
 import {
   AuthOperation,
   BufferEncoding,
-  ContainerRequest,
   ContainerResponse,
   FileSystemOperation,
   PreviewOperation,
   ProcessOperation,
   ProcessResponse,
-  WatchOperation,
 } from "../protocol/src";
 import type {
   DirectConnectionData,
