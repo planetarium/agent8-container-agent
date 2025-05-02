@@ -3,15 +3,11 @@ import { promises as fs, type FSWatcher as NodeFileSystemWatcher } from "node:fs
 import { join } from "node:path";
 import process from "node:process";
 import type {
-  BufferEncoding,
   Container,
   ContainerConfigType as ContainerConfig,
-  ContainerProcess,
   ErrorListener,
   FileSystem,
   FileSystemTree,
-  FileNode,
-  DirectoryNode,
   PathWatcherEvent,
   PortListener,
   PreviewMessage,
@@ -21,6 +17,7 @@ import type {
   WatchCallback,
   WatchOptions,
 } from "./types.ts";
+import { ContainerProcess } from "protocol/src/index.ts";
 
 export class ContainerAgentImpl implements Container {
   private readonly processes: Map<number, ChildProcess> = new Map();

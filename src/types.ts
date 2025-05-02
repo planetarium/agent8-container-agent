@@ -1,19 +1,11 @@
 import type { Buffer } from "node:buffer";
 import type { FSWatcher as NodeFileSystemWatcher } from "node:fs";
 import type { Stats } from "node:fs";
-import type { Readable } from "node:stream";
 import { z } from "zod";
 import {
-  BufferEncoding,
   ContainerProcess,
   ContainerRequest,
   ContainerResponse,
-  ProcessOperation,
-  ProcessResponse,
-  FileSystemOperation,
-  PreviewOperation,
-  WatchOperation,
-  AuthOperation,
   SpawnOptions
 } from "../protocol/src";
 
