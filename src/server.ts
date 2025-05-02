@@ -20,6 +20,7 @@ import type {
   ProcessResponse,
   WatchOperation,
   WatchPathsOperation,
+  WatchResponse,
 } from "../protocol/src/index.ts";
 import { getMachineIpMap } from "./fly.ts";
 import type { DirectConnectionData, ProxyData } from "./types.ts";
@@ -133,14 +134,15 @@ export class ContainerServer {
           if (isDirectConnection(data)) {
             this.activeWs.delete(data.wsId);
 
-            // Remove from all watch clients
-            for (const [watcherId, clients] of this.fileWatchClients.entries()) {
-              clients.delete(ws);
-
-              if (clients.size === 0) {
-                this.fileWatchClients.delete(watcherId);
+            for (const watcherId of this.fileSystemWatchers.keys()) {
+              const fsWatcher = this.fileSystemWatchers.get(watcherId);
+              if (fsWatcher) {
+                fsWatcher.close();
               }
             }
+
+            this.fileWatchClients.clear();
+            this.fileSystemWatchers.clear();
           }
         },
       },
@@ -380,7 +382,7 @@ export class ContainerServer {
   private async handleWatchOperation(
     operation: WatchOperation | WatchPathsOperation,
     ws: ServerWebSocket<WebSocketData>,
-  ): Promise<ContainerResponse<{ watcher: string }>> {
+  ): Promise<ContainerResponse<WatchResponse>> {
     try {
       const watcherId = Math.random().toString(36).substring(7);
 
@@ -405,7 +407,7 @@ export class ContainerServer {
 
       return {
         success: true,
-        data: { watcher: watcherId },
+        data: { watcherId },
       };
     } catch (error) {
       console.error("error", error);
