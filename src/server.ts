@@ -1,7 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import type { Dirent, Stats } from "node:fs";
 import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, normalize } from "node:path";
 import process from "node:process";
 import { glob } from "node:fs/promises";
 import type { Server, ServerWebSocket } from "bun";
@@ -10,13 +10,11 @@ import { getMachineIpMap } from "./fly.ts";
 import {
   AuthOperation,
   BufferEncoding,
-  ContainerRequest,
   ContainerResponse,
   FileSystemOperation,
   PreviewOperation,
   ProcessOperation,
   ProcessResponse,
-  WatchOperation,
 } from "../protocol/src";
 import type {
   DirectConnectionData,
@@ -239,9 +237,7 @@ export class ContainerServer {
   ): Promise<ContainerResponse<{ content: string } | { entries: Dirent[] } | Stats | null>> {
     try {
       const path = operation.path || '';
-      const fullPath = path.startsWith(this.config.workdirName)
-        ? path
-        : join(this.config.workdirName, path);
+      const fullPath = this.ensureSafePath(join(this.config.workdirName, path));
 
       switch (operation.type) {
         case "readFile": {
@@ -399,7 +395,7 @@ export class ContainerServer {
     try {
       const watcherId = Math.random().toString(36).substring(7);
       const path = operation.path || '.';
-      const fullPath = join(this.config.workdirName, path);
+      const fullPath = this.ensureSafePath(join(this.config.workdirName, path));
 
       if (operation.type === 'watch-paths') {
         // Handle watch-paths operation
@@ -652,6 +648,24 @@ export class ContainerServer {
     }
     this.fileSystemWatchers.clear();
     this.fileWatchClients.clear();
+  }
+
+  /**
+   * Ensures paths are safe and contained within the workspace
+   * @param userPath User-provided path that might contain path traversal attempts
+   * @returns A safe path guaranteed to be within the workspace directory
+   */
+  private ensureSafePath(userPath: string): string {
+    const normalizedPath = normalize(join(this.config.workdirName, userPath));
+    const normalizedWorkdir = normalize(this.config.workdirName);
+
+    // Check if the path is within the workspace directory
+    if (normalizedPath.startsWith(normalizedWorkdir)) {
+      return normalizedPath;
+    }
+
+    // Remove dangerous path components and keep the path within workspace
+    return join(normalizedWorkdir, userPath.split(/[\/\\]/).filter(segment => segment !== '..').join('/'));
   }
 }
 
