@@ -134,11 +134,11 @@ export class ContainerServer {
             this.activeWs.delete(data.wsId);
 
             // Remove from all watch clients
-            for (const [path, clients] of this.fileWatchClients.entries()) {
+            for (const [watcherId, clients] of this.fileWatchClients.entries()) {
               clients.delete(ws);
 
               if (clients.size === 0) {
-                this.fileWatchClients.delete(path);
+                this.fileWatchClients.delete(watcherId);
               }
             }
           }
@@ -390,16 +390,16 @@ export class ContainerServer {
         if (options.include && options.include.length > 0) {
           // Watch included patterns
           for (const pattern of options.include) {
-            const fsWatcher = await this.watchFiles(pattern, { persistent: true });
-            this.fileSystemWatchers.set(pattern, fsWatcher);
-            this.registerWatchClient(pattern, ws);
+            const fsWatcher = await this.watchFiles(watcherId, pattern, { persistent: true });
+            this.fileSystemWatchers.set(watcherId, fsWatcher);
+            this.registerWatchClient(watcherId, ws);
           }
         }
       } else {
         for (const pattern of operation.options?.patterns || []) {
-          const fsWatcher = await this.watchFiles(pattern, operation.options || {});
-          this.fileSystemWatchers.set(pattern, fsWatcher);
-          this.registerWatchClient(pattern, ws);
+          const fsWatcher = await this.watchFiles(watcherId, pattern, operation.options || {});
+          this.fileSystemWatchers.set(watcherId, fsWatcher);
+          this.registerWatchClient(watcherId, ws);
         }
       }
 
@@ -559,7 +559,7 @@ export class ContainerServer {
     return { success: true, data: null };
   }
 
-  private async watchFiles(pattern: string, options: { persistent?: boolean }): Promise<FSWatcher> {
+  private async watchFiles(watcherId: string, pattern: string, options: { persistent?: boolean }): Promise<FSWatcher> {
     const files = await Array.fromAsync(glob(pattern, { cwd: this.config.workdirName }));
     const watcher = chokidar.watch(files, {
       persistent: options.persistent ?? true,
@@ -575,7 +575,7 @@ export class ContainerServer {
       const eventType = this.mapChokidarEventToNodeEvent(eventName);
       const filename = filePath.replace(`${this.config.workdirName}/`, "");
 
-      this.notifyFileChange(pattern, eventType, filename);
+      this.notifyFileChange(watcherId, eventType, filename);
     });
 
     return watcher;
@@ -595,8 +595,8 @@ export class ContainerServer {
     }
   }
 
-  private notifyFileChange(watchPath: string, eventType: string, filename: string | null): void {
-    const clients = this.fileWatchClients.get(watchPath);
+  private notifyFileChange(watcherId: string, eventType: string, filename: string | null): void {
+    const clients = this.fileWatchClients.get(watcherId);
 
     if (!clients || clients.size === 0) {
       return;
@@ -607,7 +607,7 @@ export class ContainerServer {
       id: `watch-${Date.now()}`,
       event: "file-change",
       data: {
-        path: watchPath,
+        watcherId,
         eventType,
         filename,
       },
@@ -619,12 +619,12 @@ export class ContainerServer {
     }
   }
 
-  private registerWatchClient(pattern: string, ws: ServerWebSocket<unknown>): void {
-    const clients = this.fileWatchClients.get(pattern);
+  private registerWatchClient(watcherId: string, ws: ServerWebSocket<unknown>): void {
+    const clients = this.fileWatchClients.get(watcherId);
     if (clients) {
       clients.add(ws);
     } else {
-      this.fileWatchClients.set(pattern, new Set([ws]));
+      this.fileWatchClients.set(watcherId, new Set([ws]));
     }
   }
 
