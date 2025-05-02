@@ -2,7 +2,9 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { promises as fs, type FSWatcher as NodeFileSystemWatcher } from "node:fs";
 import { join } from "node:path";
 import process from "node:process";
+import type { ContainerProcess } from "../protocol/src/index.ts";
 import type {
+  BufferEncoding,
   Container,
   ContainerConfigType as ContainerConfig,
   ErrorListener,
@@ -17,7 +19,6 @@ import type {
   WatchCallback,
   WatchOptions,
 } from "./types.ts";
-import { ContainerProcess } from "protocol/src/index.ts";
 
 export class ContainerAgentImpl implements Container {
   private readonly processes: Map<number, ChildProcess> = new Map();
@@ -122,9 +123,9 @@ export class ContainerAgentImpl implements Container {
       for (const [name, node] of Object.entries(tree)) {
         const path = join(basePath, name);
 
-        if ('file' in node) {
+        if ("file" in node) {
           await this.fs.writeFile(path, node.file.contents);
-        } else if ('directory' in node) {
+        } else if ("directory" in node) {
           await this.fs.mkdir(path, { recursive: true });
           await writeFiles(node.directory, path);
         }

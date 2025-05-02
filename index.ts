@@ -1,19 +1,18 @@
 import process from "node:process";
-import { ContainerServer } from "@/server";
-import { ContainerConfigSchema } from "@/types";
 import { updateMachineMap } from "@/fly";
+import { ContainerServer } from "@/server";
 import dotenv from "dotenv";
 
 // Load environment variables from .env file
 dotenv.config();
 
 function main() {
-  const config = ContainerConfigSchema.parse({
-    port: parseInt(process.env.PORT || "3000", 10),
+  const config = {
+    port: Number.parseInt(process.env.PORT || "3000", 10),
     workdirName: process.env.WORKDIR_NAME || "/workspace",
     coep: process.env.COEP || "credentialless",
     forwardPreviewErrors: process.env.FORWARD_PREVIEW_ERRORS === "true",
-  });
+  };
 
   const server = new ContainerServer(config);
   updateMachineMap();

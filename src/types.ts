@@ -2,12 +2,14 @@ import type { Buffer } from "node:buffer";
 import type { FSWatcher as NodeFileSystemWatcher } from "node:fs";
 import type { Stats } from "node:fs";
 import { z } from "zod";
-import {
+import type {
   ContainerProcess,
   ContainerRequest,
   ContainerResponse,
-  SpawnOptions
-} from "../protocol/src";
+  SpawnOptions,
+} from "../protocol/src/index.ts";
+
+export type { BufferEncoding } from "../protocol/src/index.ts";
 
 // Event listener types
 export type Unsubscribe = () => void;
@@ -113,7 +115,7 @@ export interface ServerResponse extends ContainerResponse<unknown> {
 }
 
 export interface ServerEvent extends ContainerResponse<unknown> {
-  event: "file-change" | "server-ready" | "port" | "preview-message" | "error";
+  event: "file-change" | "server-ready" | "port" | "preview-message" | "error" | "process";
 }
 
 export const FileSystemOperationTypes = [

@@ -1,4 +1,4 @@
-Bun.serve({
+globalThis.Bun.serve({
   port: 5174,
   fetch(req) {
     const url = new URL(req.url);
@@ -8,5 +8,3 @@ Bun.serve({
     return new Response("Not Found", { status: 404 });
   },
 });
-
-console.log("Main service running at http://localhost:5174");

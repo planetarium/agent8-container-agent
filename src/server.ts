@@ -1,51 +1,37 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import type { Dirent, Stats } from "node:fs";
-import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { glob, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { join, normalize } from "node:path";
 import process from "node:process";
-import { glob } from "node:fs/promises";
 import type { Server, ServerWebSocket } from "bun";
-import chokidar, { FSWatcher } from "chokidar";
-import { getMachineIpMap } from "./fly.ts";
-import {
+import chokidar, { type FSWatcher } from "chokidar";
+import type {
   AuthOperation,
   BufferEncoding,
+  ContainerEventMessage,
+  ContainerRequest,
   ContainerResponse,
+  ContainerResponseWithId,
   FileSystemOperation,
+  FileSystemTree,
   PreviewOperation,
+  ProcessEventMessage,
   ProcessOperation,
   ProcessResponse,
-} from "../protocol/src";
-import type {
-  DirectConnectionData,
-  FileSystemTree,
-  ProxyData,
-  ServerEvent,
-  ServerResponse,
-} from "./types.ts";
+} from "../protocol/src/index.ts";
+import { getMachineIpMap } from "./fly.ts";
+import type { DirectConnectionData, ProxyData } from "./types.ts";
 
 type WebSocketData = ProxyData | DirectConnectionData;
 
 // Type guards
-function isProxyConnection(data: any): data is ProxyData {
+function isProxyConnection(data: WebSocketData): data is ProxyData {
   return data && "targetUrl" in data;
 }
 
-function isDirectConnection(data: any): data is DirectConnectionData {
+function isDirectConnection(data: WebSocketData): data is DirectConnectionData {
   return data && "wsId" in data;
 }
-
-declare const Bun: {
-  serve(options: {
-    port: number;
-    fetch: (req: Request, server: Server) => Response | Promise<Response> | undefined;
-    websocket: {
-      message: (ws: ServerWebSocket<WebSocketData>, message: string | Buffer) => void;
-      open?: (ws: ServerWebSocket<WebSocketData>) => void;
-      close?: (ws: ServerWebSocket<WebSocketData>) => void;
-    };
-  }): Server;
-};
 
 export class ContainerServer {
   private readonly server: Server;
@@ -54,6 +40,7 @@ export class ContainerServer {
   private readonly previewPorts: Map<string, number>;
   private readonly fileWatchClients: Map<string, Set<ServerWebSocket<unknown>>>;
   private readonly activeWs: Map<string, ServerWebSocket<WebSocketData>>;
+  private readonly processClients: Map<number, Set<ServerWebSocket<unknown>>>;
   private readonly config: {
     port: number;
     workdirName: string;
@@ -72,12 +59,13 @@ export class ContainerServer {
     this.processes = new Map();
     this.fileSystemWatchers = new Map();
     this.previewPorts = new Map();
-    this.fileWatchClients = new Map();
     this.activeWs = new Map();
+    this.fileWatchClients = new Map();
+    this.processClients = new Map();
 
     console.info("Starting server on port", config.port);
 
-    this.server = Bun.serve({
+    this.server = globalThis.Bun.serve({
       port: config.port,
       fetch: (req, server) => {
         const { pathname } = new URL(req.url);
@@ -140,7 +128,6 @@ export class ContainerServer {
         close: (ws: ServerWebSocket<WebSocketData>) => {
           // Remove client from all watch lists
           const data = ws.data;
-
           if (isDirectConnection(data)) {
             this.activeWs.delete(data.wsId);
 
@@ -162,73 +149,71 @@ export class ContainerServer {
     ws: ServerWebSocket<WebSocketData>,
     message: string | Buffer,
   ): Promise<void> {
+    console.debug(message);
+
     try {
-      const { id, operation } = JSON.parse(message.toString()) as {
-        id: string;
-        operation: any;
-      };
-
-      console.debug(message);
-
+      const { id, operation } = JSON.parse(message.toString()) as ContainerRequest;
       const { type } = operation;
+      let response: ContainerResponse;
 
-      let response: ContainerResponse<unknown>;
+      try {
+        switch (type) {
+          case "readFile":
+          case "writeFile":
+          case "rm":
+          case "readdir":
+          case "mkdir":
+          case "stat":
+          case "mount":
+            response = await this.handleFileSystemOperation(operation);
+            break;
+          case "spawn":
+          case "input":
+          case "kill":
+          case "resize":
+            response = await this.handleProcessOperation(operation, ws);
+            break;
+          case "server-ready":
+          case "port":
+          case "preview-message":
+            response = this.handlePreviewOperation(operation);
+            break;
+          case "watch":
+          case "watch-paths":
+            response = await this.handleWatchOperation(operation, ws);
+            break;
+          case "auth":
+            response = this.handleAuthOperation(operation);
+            break;
+          default:
+            response = {
+              success: false,
+              error: {
+                code: "INVALID_OPERATION",
+                message: `Invalid operation type: ${type}`,
+              },
+            };
+        }
 
-      switch (type) {
-        case "readFile":
-        case "writeFile":
-        case "rm":
-        case "readdir":
-        case "mkdir":
-        case "mount":
-        case "stat":
-          response = await this.handleFileSystemOperation(operation as FileSystemOperation);
-          break;
-        case "spawn":
-        case "input":
-        case "kill":
-        case "resize":
-          response = await this.handleProcessOperation(operation as ProcessOperation);
-          break;
-        case "server-ready":
-        case "port":
-        case "preview-message":
-          response = this.handlePreviewOperation(operation as PreviewOperation);
-          break;
-        case "watch":
-        case "watch-paths":
-          response = await this.handleWatchOperation(operation, ws);
-          break;
-        case "auth":
-          response = this.handleAuthOperation(operation as AuthOperation);
-          break;
-        default:
-          response = {
-            success: false,
-            error: {
-              code: "INVALID_OPERATION",
-              message: `Invalid operation type: ${type}`,
-            },
-          };
+        const serverResponse: ContainerResponseWithId = {
+          id,
+          ...response,
+        };
+
+        ws.send(JSON.stringify(serverResponse));
+      } catch (error) {
+        const errorResponse: ContainerResponseWithId = {
+          id,
+          success: false,
+          error: {
+            code: "INTERNAL_ERROR",
+            message: error instanceof Error ? error.message : "Unknown error",
+          },
+        };
+        ws.send(JSON.stringify(errorResponse));
       }
-
-      const serverResponse: ServerResponse = {
-        id,
-        ...response,
-      };
-
-      ws.send(JSON.stringify(serverResponse));
     } catch (error) {
-      console.error('error', error);
-      const errorResponse: ServerResponse = {
-        id: "",
-        success: false,
-        error: {
-          code: "INTERNAL_ERROR",
-          message: error instanceof Error ? error.message : "Unknown error",
-        },
-      };
-      ws.send(JSON.stringify(errorResponse));
+      console.error(error);
     }
   }
 
@@ -236,7 +221,7 @@ export class ContainerServer {
     operation: FileSystemOperation,
   ): Promise<ContainerResponse<{ content: string } | { entries: Dirent[] } | Stats | null>> {
     try {
-      const path = operation.path || '';
+      const path = operation.path || "";
       const fullPath = this.ensureSafePath(join(this.config.workdirName, path));
 
       switch (operation.type) {
@@ -250,9 +235,10 @@ export class ContainerServer {
           if (!operation.content) {
             throw new Error("Content is required for write operation");
           }
-          const content = typeof operation.content === 'string'
-            ? operation.content
-            : new TextDecoder().decode(operation.content);
+          const content =
+            typeof operation.content === "string"
+              ? operation.content
+              : new TextDecoder().decode(operation.content);
           await writeFile(fullPath, content, {
             encoding: (operation.options?.encoding as BufferEncoding) || "utf-8",
           });
@@ -284,7 +270,7 @@ export class ContainerServer {
             throw new Error("Content is required for mount operation");
           }
 
-          if (typeof content !== 'string') {
+          if (typeof content !== "string") {
             content = new TextDecoder().decode(content);
           }
 
@@ -297,7 +283,7 @@ export class ContainerServer {
           throw new Error(`Unsupported file system operation: ${operation.type}`);
       }
     } catch (error) {
-      console.error('error', error);
+      console.error("error", error);
       return {
         success: false,
         error: {
@@ -310,6 +296,7 @@ export class ContainerServer {
 
   private handleProcessOperation(
     operation: ProcessOperation,
+    ws: ServerWebSocket<WebSocketData>,
   ): Promise<ContainerResponse<ProcessResponse | null>> {
     try {
       switch (operation.type) {
@@ -317,7 +304,7 @@ export class ContainerServer {
           if (!operation.command) {
             throw new Error("Command is required for spawn operation");
           }
-          return Promise.resolve(this.spawnProcess(operation.command, operation.args || []));
+          return Promise.resolve(this.spawnProcess(operation.command, operation.args || [], ws));
         }
         case "input": {
           if (!(operation.pid && operation.data)) {
@@ -343,7 +330,7 @@ export class ContainerServer {
           throw new Error(`Unsupported process operation type: ${operation.type}`);
       }
     } catch (error) {
-      console.error('error', error);
+      console.error("error", error);
       return Promise.resolve({
         success: false,
         error: {
@@ -377,7 +364,7 @@ export class ContainerServer {
           throw new Error(`Unsupported preview operation: ${type}`);
       }
     } catch (error) {
-      console.error('error', error);
+      console.error("error", error);
       return {
         success: false,
         error: {
@@ -389,15 +376,16 @@ export class ContainerServer {
   }
 
   private async handleWatchOperation(
+    //biome-ignore lint/suspicious/noExplicitAny: to be fixed
     operation: any,
     ws: ServerWebSocket<WebSocketData>,
   ): Promise<ContainerResponse<{ watcher: string }>> {
     try {
       const watcherId = Math.random().toString(36).substring(7);
-      const path = operation.path || '.';
+      const path = operation.path || ".";
       const fullPath = this.ensureSafePath(join(this.config.workdirName, path));
 
-      if (operation.type === 'watch-paths') {
+      if (operation.type === "watch-paths") {
         // Handle watch-paths operation
         const options = operation.options || {};
         if (options.include && options.include.length > 0) {
@@ -427,7 +415,7 @@ export class ContainerServer {
         data: { watcher: watcherId },
       };
     } catch (error) {
-      console.error('error', error);
+      console.error("error", error);
       return {
         success: false,
         error: {
@@ -473,7 +461,11 @@ export class ContainerServer {
     this.server.stop();
   }
 
-  private spawnProcess(command: string, args: string[]): ContainerResponse<ProcessResponse> {
+  private spawnProcess(
+    command: string,
+    args: string[],
+    ws: ServerWebSocket<WebSocketData>,
+  ): ContainerResponse<ProcessResponse> {
     const childProcess = spawn(command, args, {
       cwd: this.config.workdirName,
       stdio: ["pipe", "pipe", "pipe"],
@@ -484,58 +476,61 @@ export class ContainerServer {
       throw new Error("Failed to create process streams");
     }
 
-    const textEncoder = new TextEncoder();
+    const { pid } = childProcess;
     const textDecoder = new TextDecoder();
 
-    const writer = new WritableStream<string>({
-      write: (chunk) => {
-        return new Promise<void>((resolve, reject) => {
-          childProcess.stdin?.write(textEncoder.encode(chunk), (error) => {
-            if (error) {
-              reject(error);
-            } else {
-              resolve();
-            }
-          });
-        });
-      },
+    this.processes.set(pid, childProcess);
+    this.registerProcessClient(pid, ws);
+
+    childProcess.stdout.on("data", (chunk) => {
+      const decoded = textDecoder.decode(chunk);
+      this.notifyProcess(pid, "stdout", decoded);
     });
 
-    const output = new ReadableStream<string>({
-      start: (controller) => {
-        childProcess.stdout?.on("data", (chunk) => {
-          controller.enqueue(textDecoder.decode(chunk));
-        });
-        childProcess.stdout?.on("end", () => {
-          controller.close();
-        });
-        childProcess.stdout?.on("error", (error) => {
-          controller.error(error);
-        });
-      },
+    childProcess.on("exit", (code) => {
+      this.notifyProcess(pid, "exit", String(code ?? 0));
+      this.processClients.delete(pid);
     });
-
-    this.processes.set(childProcess.pid, childProcess);
 
     return {
       success: true,
       data: {
-        success: true,
         pid: childProcess.pid,
-        process: {
-          input: {
-            getWriter: () => writer.getWriter(),
-          },
-          output,
-          exit: new Promise((resolve) => {
-            childProcess.on("exit", (code) => resolve(code ?? 0));
-          }),
-          resize: () => {
-            // No-op as Node.js ChildProcess doesn't support terminal resize
-          },
-        },
       },
     };
+  }
+
+  private notifyProcess(pid: number, stream: string, data: string): void {
+    const clients = this.processClients.get(pid);
+
+    if (!clients || clients.size === 0) {
+      return;
+    }
+
+    // Create stdout notification message
+    const message: ContainerEventMessage<ProcessEventMessage> = {
+      id: `process-${stream}-${Date.now()}`,
+      event: "process",
+      data: {
+        pid,
+        stream,
+        data,
+      },
+    };
+
+    // Send stdout notification to all clients watching this process
+    for (const client of clients) {
+      client.send(JSON.stringify(message));
+    }
+  }
+
+  private registerProcessClient(pid: number, ws: ServerWebSocket<unknown>): void {
+    if (!this.processClients.has(pid)) {
+      this.processClients.set(pid, new Set());
+    }
+
+    const clients = this.processClients.get(pid);
+    clients?.add(ws);
   }
 
   private sendInput(pid: number, data: string): ContainerResponse<null> {
@@ -571,10 +566,7 @@ export class ContainerServer {
     return { success: true, data: null };
   }
 
-  private async watchFiles(
-    pattern: string,
-    options: { persistent?: boolean },
-  ): Promise<FSWatcher> {
+  private async watchFiles(pattern: string, options: { persistent?: boolean }): Promise<FSWatcher> {
     const files = await Array.fromAsync(glob(pattern, { cwd: this.config.workdirName }));
     const watcher = chokidar.watch(files, {
       persistent: options.persistent ?? true,
@@ -613,17 +605,19 @@ export class ContainerServer {
   private notifyFileChange(watchPath: string, eventType: string, filename: string | null): void {
     const clients = this.fileWatchClients.get(watchPath);
 
-    if (!clients || clients.size === 0) return;
+    if (!clients || clients.size === 0) {
+      return;
+    }
 
     // Create change notification message
-    const changeMessage: ServerEvent = {
+    const changeMessage: ContainerEventMessage = {
+      id: `watch-${Date.now()}`,
       event: "file-change",
       data: {
         path: watchPath,
         eventType,
-        filename
+        filename,
       },
-      success: true,
     };
 
     // Send change notification to all clients watching this path
@@ -648,6 +642,7 @@ export class ContainerServer {
     }
     this.fileSystemWatchers.clear();
     this.fileWatchClients.clear();
+    this.processClients.clear();
   }
 
   /**
@@ -665,7 +660,13 @@ export class ContainerServer {
     }
 
     // Remove dangerous path components and keep the path within workspace
-    return join(normalizedWorkdir, userPath.split(/[\/\\]/).filter(segment => segment !== '..').join('/'));
+    return join(
+      normalizedWorkdir,
+      userPath
+        .split(/[\/\\]/)
+        .filter((segment) => segment !== "..")
+        .join("/"),
+    );
   }
 }
 
@@ -675,10 +676,9 @@ async function mount(mountPath: string, tree: FileSystemTree) {
   for (const [name, item] of Object.entries(tree)) {
     const fullPath = join(mountPath, name);
 
-    if ('file' in item) {
+    if ("file" in item) {
       await writeFile(fullPath, item.file.contents);
-    }
-    else if ('directory' in item) {
+    } else if ("directory" in item) {
       await mount(fullPath, item.directory);
     }
   }
