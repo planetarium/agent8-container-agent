@@ -3,19 +3,6 @@
  * This file can be shared between client and server projects
  */
 
-// Stream-related type definitions
-export interface WritableStreamDefaultWriter<T> {
-  write(chunk: T): Promise<void>;
-  close(): Promise<void>;
-  abort(reason?: any): Promise<void>;
-
-  // Additional properties needed for compatibility
-  closed: Promise<void>;
-  desiredSize: number | null;
-  ready: Promise<void>;
-  releaseLock(): void;
-}
-
 // Basic types definitions
 export type BufferEncoding =
   | 'ascii'
@@ -170,9 +157,7 @@ export type EventListenerMap = {
 
 // Container process interface
 export interface ContainerProcess {
-  input: {
-    getWriter(): WritableStreamDefaultWriter<string>;
-  };
+  input: WritableStream<string>;
   output: ReadableStream<string>;
   exit: Promise<number>;
   resize(dimensions: { cols: number; rows: number }): void;
@@ -192,7 +177,7 @@ export interface ExecutionResult {
 
 export interface ShellSession {
   process: ContainerProcess;
-  input: WritableStreamDefaultWriter<string>;
+  input: WritableStream<string>;
   output: ReadableStream<string>;
   internalOutput?: ReadableStream<string>;
   ready: Promise<void>;
