@@ -42,6 +42,7 @@ export class ContainerServer {
   private readonly fileSystemWatchers: Map<string, FSWatcher>;
   private readonly previewPorts: Map<string, number>;
   private readonly fileWatchClients: Map<string, Set<ServerWebSocket<unknown>>>;
+  private readonly clientWatchers: Map<ServerWebSocket<unknown>, Set<string>>;
   private readonly activeWs: Map<string, ServerWebSocket<WebSocketData>>;
   private readonly processClients: Map<number, Set<ServerWebSocket<unknown>>>;
   private readonly config: {
@@ -65,6 +66,7 @@ export class ContainerServer {
     this.activeWs = new Map();
     this.fileWatchClients = new Map();
     this.processClients = new Map();
+    this.clientWatchers = new Map();
 
     console.info("Starting server on port", config.port);
 
@@ -134,15 +136,28 @@ export class ContainerServer {
           if (isDirectConnection(data)) {
             this.activeWs.delete(data.wsId);
 
-            for (const watcherId of this.fileSystemWatchers.keys()) {
-              const fsWatcher = this.fileSystemWatchers.get(watcherId);
-              if (fsWatcher) {
-                fsWatcher.close();
+            if (this.clientWatchers.has(ws)) {
+              const watcherIds = this.clientWatchers.get(ws);
+              if (watcherIds) {
+                for (const watcherId of watcherIds) {
+                  const clients = this.fileWatchClients.get(watcherId);
+                  if (clients) {
+                    clients.delete(ws);
+
+                    if (clients.size === 0) {
+                      const fsWatcher = this.fileSystemWatchers.get(watcherId);
+                      if (fsWatcher) {
+                        fsWatcher.close();
+                        this.fileSystemWatchers.delete(watcherId);
+                      }
+                      this.fileWatchClients.delete(watcherId);
+                    }
+                  }
+                }
+
+                this.clientWatchers.delete(ws);
               }
             }
-
-            this.fileWatchClients.clear();
-            this.fileSystemWatchers.clear();
           }
         },
       },
@@ -628,6 +643,12 @@ export class ContainerServer {
     } else {
       this.fileWatchClients.set(watcherId, new Set([ws]));
     }
+
+    if (!this.clientWatchers.has(ws)) {
+      this.clientWatchers.set(ws, new Set([watcherId]));
+    } else {
+      this.clientWatchers.get(ws)?.add(watcherId);
+    }
   }
 
   private cleanup() {
@@ -637,6 +658,7 @@ export class ContainerServer {
     }
     this.fileSystemWatchers.clear();
     this.fileWatchClients.clear();
+    this.clientWatchers.clear();
     this.processClients.clear();
   }
 }
