@@ -224,7 +224,7 @@ export class ContainerServer {
   ): Promise<ContainerResponse<{ content: string } | { entries: Dirent[] } | Stats | null>> {
     try {
       const path = operation.path || "";
-      const fullPath = this.ensureSafePath(join(this.config.workdirName, path));
+      const fullPath = ensureSafePath(this.config.workdirName, path);
 
       switch (operation.type) {
         case "readFile": {
@@ -637,30 +637,25 @@ export class ContainerServer {
     this.fileWatchClients.clear();
     this.processClients.clear();
   }
+}
 
-  /**
-   * Ensures paths are safe and contained within the workspace
-   * @param userPath User-provided path that might contain path traversal attempts
-   * @returns A safe path guaranteed to be within the workspace directory
-   */
-  private ensureSafePath(userPath: string): string {
-    const normalizedPath = normalize(join(this.config.workdirName, userPath));
-    const normalizedWorkdir = normalize(this.config.workdirName);
+export function ensureSafePath(workdir: string, userPath: string): string {
+  const normalizedPath = normalize(join(workdir, userPath));
+  const normalizedWorkdir = normalize(workdir);
 
-    // Check if the path is within the workspace directory
-    if (normalizedPath.startsWith(normalizedWorkdir)) {
-      return normalizedPath;
-    }
-
-    // Remove dangerous path components and keep the path within workspace
-    return join(
-      normalizedWorkdir,
-      userPath
-        .split(/[\/\\]/)
-        .filter((segment) => segment !== "..")
-        .join("/"),
-    );
+  // Check if the path is within the workspace directory
+  if (normalizedPath.startsWith(normalizedWorkdir)) {
+    return normalizedPath;
   }
+
+  // Remove dangerous path components and keep the path within workspace
+  return join(
+    normalizedWorkdir,
+    userPath
+      .split(/[\/\\]/)
+      .filter((segment) => segment !== "..")
+      .join("/"),
+  );
 }
 
 async function mount(mountPath: string, tree: FileSystemTree) {
