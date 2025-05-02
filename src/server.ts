@@ -360,24 +360,35 @@ export class ContainerServer {
     }
   }
 
-  private handlePreviewOperation(operation: PreviewOperation): ContainerResponse<null> {
+  private handlePreviewOperation(operation: PreviewOperation): ContainerResponse<PreviewOperation> {
     try {
       const { type, data } = operation;
+      const port = 5174;
+      const machineId = "3287ee6c367938";
+      const url = `https://${machineId}.local-credentialless.webcontainer-api.io`;
 
       switch (type) {
         case "server-ready":
-          return { success: true, data: null };
+          return { success: true, data: { 
+            type: 'server-ready',
+            data: { port: port, url: url }
+          }};
         case "port": {
           if (data?.port && data?.previewId) {
             this.previewPorts.set(data.previewId, data.port);
           }
-          return { success: true, data: null };
+          return { success: true, data: {
+            type: 'port',
+            data: { port: port, type: 'open', url: url }
+          } };
         }
         case "preview-message": {
           if (data?.error && this.config.forwardPreviewErrors) {
             process.stderr.write(`Preview error: ${data.error}\n`);
           }
-          return { success: true, data: null };
+          return { success: true, data: {
+            type: 'preview-message'
+          } };
         }
         default:
           throw new Error(`Unsupported preview operation: ${type}`);
