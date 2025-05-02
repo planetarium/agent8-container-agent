@@ -1,39 +1,44 @@
-# agent8-container-agent
+# Remote Container Protocol
 
-To install dependencies:
+Protocol definitions for remote container communication between client and server projects.
 
-```bash
-bun install
-```
+## Overview
 
-## Environment Variables
+This repository contains shared type definitions and interfaces used for communication between client applications and server-side container services.
 
-The application uses the following environment variables:
+## Features
 
-```
-PORT=3000
-WORKDIR_NAME=/workspace
-COEP=credentialless
-FORWARD_PREVIEW_ERRORS=true
-```
+- Self-contained protocol definitions
+- No external dependencies
+- TypeScript interfaces and types
+- Shared between client and server projects
 
-You can configure these variables in two ways:
+## Usage
 
-1. For local development, create a `.env` file in the root directory with the values above.
-2. When running the container, you can override the default values by setting environment variables:
+### For client projects:
 
 ```bash
-docker run -e PORT=8080 -e WORKDIR_NAME=/custom-workspace ... agent8-container-agent
+git subtree add --prefix=path/to/client/protocol git@github.com:planetarium/agent8-container-protocol.git main --squash
 ```
 
-Default values are already set in the Containerfile.
-
-## Running the Application
-
-To run:
+### For server projects:
 
 ```bash
-bun run index.ts
+git subtree add --prefix=path/to/server/protocol git@github.com:planetarium/agent8-container-protocol.git main --squash
 ```
 
-This project was created using `bun init` in bun v1.2.10. [Bun](https://bun.sh) is a fast all-in-one JavaScript runtime.
+## Updating
+
+To update the subtree in your project:
+
+```bash
+git subtree pull --prefix=path/to/protocol git@github.com:planetarium/agent8-container-protocol.git main --squash
+```
+
+## Contributing
+
+To contribute changes from your project back to the shared protocol:
+
+```bash
+git subtree push --prefix=path/to/protocol git@github.com:planetarium/agent8-container-protocol.git main
+``` 
