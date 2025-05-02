@@ -3,10 +3,8 @@ import { promises as fs, type FSWatcher as NodeFileSystemWatcher } from "node:fs
 import { join } from "node:path";
 import process from "node:process";
 import type {
-  BufferEncoding,
   Container,
   ContainerConfigType as ContainerConfig,
-  ContainerProcess,
   ErrorListener,
   FileSystem,
   FileSystemTree,
@@ -19,6 +17,7 @@ import type {
   WatchCallback,
   WatchOptions,
 } from "./types.ts";
+import { ContainerProcess } from "protocol/src/index.ts";
 
 export class ContainerAgentImpl implements Container {
   private readonly processes: Map<number, ChildProcess> = new Map();
@@ -120,13 +119,14 @@ export class ContainerAgentImpl implements Container {
 
   async mount(data: FileSystemTree): Promise<void> {
     const writeFiles = async (tree: FileSystemTree, basePath = "") => {
-      for (const [name, content] of Object.entries(tree)) {
+      for (const [name, node] of Object.entries(tree)) {
         const path = join(basePath, name);
-        if (typeof content === "string") {
-          await this.fs.writeFile(path, content);
-        } else {
+
+        if ('file' in node) {
+          await this.fs.writeFile(path, node.file.contents);
+        } else if ('directory' in node) {
           await this.fs.mkdir(path, { recursive: true });
-          await writeFiles(content, path);
+          await writeFiles(node.directory, path);
         }
       }
     };

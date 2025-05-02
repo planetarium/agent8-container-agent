@@ -1,21 +1,13 @@
 import type { Buffer } from "node:buffer";
 import type { FSWatcher as NodeFileSystemWatcher } from "node:fs";
 import type { Stats } from "node:fs";
-import type { Readable } from "node:stream";
 import { z } from "zod";
-
-export type BufferEncoding =
-  | "ascii"
-  | "utf8"
-  | "utf-8"
-  | "utf16le"
-  | "ucs2"
-  | "ucs-2"
-  | "base64"
-  | "base64url"
-  | "latin1"
-  | "binary"
-  | "hex";
+import {
+  ContainerProcess,
+  ContainerRequest,
+  ContainerResponse,
+  SpawnOptions
+} from "../protocol/src";
 
 // Event listener types
 export type Unsubscribe = () => void;
@@ -46,43 +38,6 @@ export interface FileSystem {
   watch(pattern: string, options?: { persistent?: boolean }): NodeFileSystemWatcher;
 }
 
-// Container process interface
-export interface ContainerProcess {
-  input: {
-    getWriter(): WritableStreamDefaultWriter<string>;
-  };
-  output: ReadableStream<string>;
-  exit: Promise<number>;
-  resize(dimensions: { cols: number; rows: number }): void;
-}
-
-// Response types
-export interface ContainerResponse<T = void> {
-  success: boolean;
-  data?: T;
-  error?: {
-    code: string;
-    message: string;
-  };
-}
-
-export interface ProcessResponse {
-  success: boolean;
-  pid?: number;
-  process?: ContainerProcess;
-  stdout?: Readable;
-  stderr?: Readable;
-  error?: {
-    code: string;
-    message: string;
-  };
-}
-
-// Container process options
-export interface SpawnOptions {
-  env?: Record<string, string>;
-}
-
 // Container interface
 export interface Container {
   fs: FileSystem;
@@ -99,9 +54,20 @@ export interface Container {
 }
 
 // File system types
-export type FileSystemTree = {
-  [key: string]: string | FileSystemTree;
-};
+export interface FileNode {
+  file: {
+    contents: string;
+  };
+}
+
+export interface DirectoryNode {
+  directory: FileSystemTree;
+}
+
+export interface FileSystemTree {
+  [name: string]: FileNode | DirectoryNode;
+}
+
 export type FileSystemResult = string | Buffer | NodeFileSystemWatcher | Stats;
 
 // Watch types
@@ -157,73 +123,16 @@ export const FileSystemOperationTypes = [
   "readdir",
   "mkdir",
   "stat",
-  "watch",
+  "mount",
 ] as const;
-
-// Operation types
-export type FileSystemOperation = {
-  type: (typeof FileSystemOperationTypes)[number];
-  path: string;
-  content?: string;
-  options?: {
-    recursive?: boolean;
-    encoding?: string;
-    watchOptions?: {
-      persistent?: boolean;
-      recursive?: boolean;
-      encoding?: string;
-    };
-  };
-};
 
 export const ProcessOperationTypes = ["spawn", "input", "kill", "resize"] as const;
 
-export type ProcessOperation = {
-  type: (typeof ProcessOperationTypes)[number];
-  command?: string;
-  args?: string[];
-  data?: string;
-  input?: string;
-  pid?: number;
-  cols?: number;
-  rows?: number;
-};
-
 export const PreviewOperationTypes = ["server-ready", "port", "preview-message"] as const;
 
-export type PreviewOperation = {
-  type: (typeof PreviewOperationTypes)[number];
-  data?: {
-    port?: number;
-    previewId?: string;
-    error?: string;
-  };
-};
-
-export const WatchOperationTypes = ["watch-paths"] as const;
-
-export type WatchOperation = {
-  type: (typeof WatchOperationTypes)[number];
-  path?: string;
-  patterns?: string[];
-  options?: {
-    recursive?: boolean;
-  };
-};
+export const WatchOperationTypes = ["watch", "watch-paths"] as const;
 
 export const AuthOperationTypes = ["auth", "login", "logout"] as const;
-
-export type AuthOperation = {
-  type: (typeof AuthOperationTypes)[number];
-  token?: string;
-};
-
-export type ContainerRequest =
-  | FileSystemOperation
-  | ProcessOperation
-  | PreviewOperation
-  | WatchOperation
-  | AuthOperation;
 
 // Bun's FileSystemWatcher type
 export interface FileSystemWatcher {
@@ -238,5 +147,3 @@ export interface ProxyData {
 export interface DirectConnectionData {
   wsId: string;
 }
-
-

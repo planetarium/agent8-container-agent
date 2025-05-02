@@ -1,11 +1,13 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import type { Dirent, Stats } from "node:fs";
-import { mkdir, readFile, readdir, rm, stat, watch, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
+import { glob } from "node:fs/promises";
 import type { Server, ServerWebSocket } from "bun";
+import chokidar, { FSWatcher } from "chokidar";
 import { getMachineIpMap } from "./fly.ts";
-import type {
+import {
   AuthOperation,
   BufferEncoding,
   ContainerRequest,
@@ -14,24 +16,25 @@ import type {
   PreviewOperation,
   ProcessOperation,
   ProcessResponse,
-  ProxyData,
-  ServerMessage,
   WatchOperation,
+} from "../protocol/src";
+import type {
   DirectConnectionData,
-  ServerResponse,
+  FileSystemTree,
+  ProxyData,
   ServerEvent,
+  ServerResponse,
 } from "./types.ts";
-
 
 type WebSocketData = ProxyData | DirectConnectionData;
 
 // Type guards
 function isProxyConnection(data: any): data is ProxyData {
-  return data && 'targetUrl' in data;
+  return data && "targetUrl" in data;
 }
 
 function isDirectConnection(data: any): data is DirectConnectionData {
-  return data && 'wsId' in data;
+  return data && "wsId" in data;
 }
 
 declare const Bun: {
@@ -49,7 +52,7 @@ declare const Bun: {
 export class ContainerServer {
   private readonly server: Server;
   private readonly processes: Map<number, ChildProcess>;
-  private readonly fileSystemWatchers: Map<string, AbortController>;
+  private readonly fileSystemWatchers: Map<string, FSWatcher>;
   private readonly previewPorts: Map<string, number>;
   private readonly fileWatchClients: Map<string, Set<ServerWebSocket<unknown>>>;
   private readonly activeWs: Map<string, ServerWebSocket<WebSocketData>>;
@@ -100,11 +103,13 @@ export class ContainerServer {
             });
             return proxiedResponse;
           }
-        } else if (server.upgrade(req, {
-          data: {
-            wsId: Math.random().toString(36).substring(7)
-          }
-        })) {
+        } else if (
+          server.upgrade(req, {
+            data: {
+              wsId: Math.random().toString(36).substring(7),
+            },
+          })
+        ) {
           return;
         }
         return new Response("Upgrade failed", { status: 400 });
@@ -122,7 +127,6 @@ export class ContainerServer {
             ws.data.targetSocket = targetSocket;
 
             targetSocket.onmessage = (ev) => {
-              console.debug(ev);
               if (typeof ev.data === "string" || ev.data instanceof Uint8Array) {
                 ws.send(ev.data);
               }
@@ -163,7 +167,7 @@ export class ContainerServer {
     try {
       const { id, operation } = JSON.parse(message.toString()) as {
         id: string;
-        operation: ContainerRequest;
+        operation: any;
       };
 
       console.debug(message);
@@ -178,9 +182,9 @@ export class ContainerServer {
         case "rm":
         case "readdir":
         case "mkdir":
+        case "mount":
         case "stat":
-        case "watch":
-          response = await this.handleFileSystemOperation(operation as FileSystemOperation, ws);
+          response = await this.handleFileSystemOperation(operation as FileSystemOperation);
           break;
         case "spawn":
         case "input":
@@ -193,8 +197,9 @@ export class ContainerServer {
         case "preview-message":
           response = this.handlePreviewOperation(operation as PreviewOperation);
           break;
+        case "watch":
         case "watch-paths":
-          response = await this.handleWatchOperation(operation as WatchOperation, ws);
+          response = await this.handleWatchOperation(operation, ws);
           break;
         case "auth":
           response = this.handleAuthOperation(operation as AuthOperation);
@@ -216,6 +221,7 @@ export class ContainerServer {
 
       ws.send(JSON.stringify(serverResponse));
     } catch (error) {
+      console.error('error', error);
       const errorResponse: ServerResponse = {
         id: "",
         success: false,
@@ -230,25 +236,28 @@ export class ContainerServer {
 
   private async handleFileSystemOperation(
     operation: FileSystemOperation,
-    ws: ServerWebSocket<WebSocketData>,
   ): Promise<ContainerResponse<{ content: string } | { entries: Dirent[] } | Stats | null>> {
-    const fullPath = operation.path.startsWith(this.config.workdirName)
-      ? operation.path
-      : join(this.config.workdirName, operation.path);
-
     try {
+      const path = operation.path || '';
+      const fullPath = path.startsWith(this.config.workdirName)
+        ? path
+        : join(this.config.workdirName, path);
+
       switch (operation.type) {
         case "readFile": {
           const content = await readFile(fullPath, {
             encoding: (operation.options?.encoding as BufferEncoding) || "utf-8",
           });
-          return { success: true, data: { content } };
+          return { success: true, data: { content: content.toString() } };
         }
         case "writeFile": {
           if (!operation.content) {
             throw new Error("Content is required for write operation");
           }
-          await writeFile(fullPath, operation.content, {
+          const content = typeof operation.content === 'string'
+            ? operation.content
+            : new TextDecoder().decode(operation.content);
+          await writeFile(fullPath, content, {
             encoding: (operation.options?.encoding as BufferEncoding) || "utf-8",
           });
           return { success: true, data: null };
@@ -273,28 +282,26 @@ export class ContainerServer {
           const stats = await stat(fullPath);
           return { success: true, data: stats };
         }
-        case "watch": {
-          const abortController = await this.watchFiles(fullPath, {
-            persistent: operation.options?.watchOptions?.persistent,
-            recursive: operation.options?.watchOptions?.recursive,
-            encoding: (operation.options?.watchOptions?.encoding as BufferEncoding) || "utf-8",
-          });
-
-          if (this.fileSystemWatchers.has(fullPath)) {
-            this.fileSystemWatchers.get(fullPath)?.abort();
+        case "mount": {
+          let content = operation.content;
+          if (!content) {
+            throw new Error("Content is required for mount operation");
           }
 
-          this.fileSystemWatchers.set(fullPath, abortController);
+          if (typeof content !== 'string') {
+            content = new TextDecoder().decode(content);
+          }
 
-          // Register this client to receive notifications for this path
-          this.registerWatchClient(fullPath, ws);
+          const tree = JSON.parse(content) as FileSystemTree;
 
+          await mount(fullPath, tree);
           return { success: true, data: null };
         }
         default:
           throw new Error(`Unsupported file system operation: ${operation.type}`);
       }
     } catch (error) {
+      console.error('error', error);
       return {
         success: false,
         error: {
@@ -340,6 +347,7 @@ export class ContainerServer {
           throw new Error(`Unsupported process operation type: ${operation.type}`);
       }
     } catch (error) {
+      console.error('error', error);
       return Promise.resolve({
         success: false,
         error: {
@@ -373,6 +381,7 @@ export class ContainerServer {
           throw new Error(`Unsupported preview operation: ${type}`);
       }
     } catch (error) {
+      console.error('error', error);
       return {
         success: false,
         error: {
@@ -384,26 +393,37 @@ export class ContainerServer {
   }
 
   private async handleWatchOperation(
-    operation: WatchOperation,
+    operation: any,
     ws: ServerWebSocket<WebSocketData>,
   ): Promise<ContainerResponse<{ watcher: string }>> {
     try {
       const watcherId = Math.random().toString(36).substring(7);
-      const path = operation.path || ".";
+      const path = operation.path || '.';
       const fullPath = join(this.config.workdirName, path);
 
-      if (operation.type === "watch-paths") {
-        // Create watcher and store it
-        const abortController = await this.watchFiles(fullPath, operation.options || {});
-        this.fileSystemWatchers.set(fullPath, abortController);
-
-        // Register this client to receive notifications for this path
+      if (operation.type === 'watch-paths') {
+        // Handle watch-paths operation
+        const options = operation.options || {};
+        if (options.include && options.include.length > 0) {
+          // Watch included patterns
+          for (const pattern of options.include) {
+            const fsWatcher = await this.watchFiles(pattern, { persistent: true });
+            this.fileSystemWatchers.set(pattern, fsWatcher);
+            this.registerWatchClient(pattern, ws);
+          }
+        }
+      } else if (operation.options?.patterns && operation.options.patterns.length > 0) {
+        // Watch each pattern
+        for (const pattern of operation.options.patterns) {
+          const fsWatcher = await this.watchFiles(pattern, operation.options || {});
+          this.fileSystemWatchers.set(pattern, fsWatcher);
+          this.registerWatchClient(pattern, ws);
+        }
+      } else {
+        // Watch a single path
+        const fsWatcher = await this.watchFiles(fullPath, operation.options || {});
+        this.fileSystemWatchers.set(fullPath, fsWatcher);
         this.registerWatchClient(fullPath, ws);
-
-        return {
-          success: true,
-          data: { watcher: watcherId },
-        };
       }
 
       return {
@@ -411,6 +431,7 @@ export class ContainerServer {
         data: { watcher: watcherId },
       };
     } catch (error) {
+      console.error('error', error);
       return {
         success: false,
         error: {
@@ -555,41 +576,41 @@ export class ContainerServer {
   }
 
   private async watchFiles(
-    path: string,
-    options: { persistent?: boolean; recursive?: boolean; encoding?: BufferEncoding }
-  ): Promise<AbortController> {
-    const abortController = new AbortController();
-    const signal = abortController.signal;
-
-    const watcher = watch(path, {
-      signal,
+    pattern: string,
+    options: { persistent?: boolean },
+  ): Promise<FSWatcher> {
+    const files = await Array.fromAsync(glob(pattern, { cwd: this.config.workdirName }));
+    const watcher = chokidar.watch(files, {
       persistent: options.persistent ?? true,
-      recursive: options.recursive,
-      encoding: options.encoding || "utf-8",
+      ignoreInitial: true,
+      cwd: this.config.workdirName,
+      awaitWriteFinish: {
+        stabilityThreshold: 300,
+        pollInterval: 100,
+      },
     });
 
-    // Start the watcher processing in a separate background task
-    this.startWatcherProcessing(watcher, path);
+    watcher.on("all", (eventName, filePath) => {
+      const eventType = this.mapChokidarEventToNodeEvent(eventName);
+      const filename = filePath.replace(`${this.config.workdirName}/`, "");
 
-    return abortController;
+      this.notifyFileChange(pattern, eventType, filename);
+    });
+
+    return watcher;
   }
 
-  private async startWatcherProcessing(
-    watcher: AsyncIterable<{ eventType: string; filename: string | null }>,
-    path: string
-  ): Promise<void> {
-    try {
-      for await (const event of watcher) {
-        // Notify all clients about the file change
-        this.notifyFileChange(path, event.eventType, event.filename);
-      }
-    } catch (error) {
-      if (error instanceof Error && error.name === "AbortError") {
-        console.debug(`Watcher for ${path} aborted`);
-        return;
-      } else {
-        console.error(`Error watching ${path}:`, error);
-      }
+  private mapChokidarEventToNodeEvent(chokidarEvent: string): string {
+    // Map chokidar events to Node.js fs.watch events
+    switch (chokidarEvent) {
+      case "add":
+      case "change":
+        return "change";
+      case "unlink":
+      case "unlinkDir":
+        return "rename";
+      default:
+        return chokidarEvent;
     }
   }
 
@@ -615,21 +636,36 @@ export class ContainerServer {
     }
   }
 
-  private registerWatchClient(path: string, ws: ServerWebSocket<unknown>): void {
-    const clients = this.fileWatchClients.get(path);
-    if (!clients) {
-      this.fileWatchClients.set(path, new Set([ws]));
-    } else {
+  private registerWatchClient(pattern: string, ws: ServerWebSocket<unknown>): void {
+    const clients = this.fileWatchClients.get(pattern);
+    if (clients) {
       clients.add(ws);
+    } else {
+      this.fileWatchClients.set(pattern, new Set([ws]));
     }
   }
 
   private cleanup() {
     // Abort all watchers
-    for (const abortController of this.fileSystemWatchers.values()) {
-      abortController.abort();
+    for (const fsWatcher of this.fileSystemWatchers.values()) {
+      fsWatcher.close();
     }
     this.fileSystemWatchers.clear();
     this.fileWatchClients.clear();
+  }
+}
+
+async function mount(mountPath: string, tree: FileSystemTree) {
+  await mkdir(mountPath, { recursive: true });
+
+  for (const [name, item] of Object.entries(tree)) {
+    const fullPath = join(mountPath, name);
+
+    if ('file' in item) {
+      await writeFile(fullPath, item.file.contents);
+    }
+    else if ('directory' in item) {
+      await mount(fullPath, item.directory);
+    }
   }
 }
