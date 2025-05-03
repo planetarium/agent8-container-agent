@@ -35,4 +35,4 @@ COPY --from=builder /app/preview.ts ./
 
 EXPOSE 3000
 
-ENTRYPOINT ["sh", "-c", "bun /workspace/preview.ts & bun /app/dist/index.js"]
+ENTRYPOINT ["bun", "/app/dist/index.js"]

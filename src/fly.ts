@@ -1,4 +1,6 @@
 import process from "node:process";
+import isPortReachable from 'is-port-reachable';
+
 
 interface Machine {
   id: string;
@@ -41,4 +43,37 @@ export async function updateMachineMap(): Promise<void> {
   } catch (e: unknown) {
     console.error("Fly API error:", e instanceof Error ? e.message : e);
   }
+}
+
+export function watchPortReachable(
+  host: string,
+  port: number,
+  onChange: (open: boolean) => void,
+  {
+    intervalMs = 500,
+    timeoutMs = Infinity,
+  }: { intervalMs?: number; timeoutMs?: number } = {}
+): () => void {
+  let cancelled = false;
+  let lastStatus: boolean | undefined = undefined;
+
+  const stop = () => { cancelled = true; };
+
+  // 내부에서 비동기 감시 실행
+  (async () => {
+    const start = Date.now();
+
+    while (!cancelled && (Date.now() - start < timeoutMs)) {
+      const reachable = await isPortReachable(port, { host });
+
+      if (reachable !== lastStatus) {
+        onChange(reachable);
+        lastStatus = reachable;
+      }
+
+      await new Promise(r => setTimeout(r, intervalMs));
+    }
+  })();
+
+  return stop;
 }

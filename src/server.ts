@@ -2,6 +2,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import type { Dirent, Stats } from "node:fs";
 import { glob, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { join, normalize } from "node:path";
+import { PortScanner } from "./portScanner/portScanner.ts";
 import process from "node:process";
 import type { Server, ServerWebSocket } from "bun";
 import chokidar, { type FSWatcher } from "chokidar";
@@ -22,9 +23,8 @@ import type {
   WatchPathsOperation,
   WatchResponse,
 } from "../protocol/src/index.ts";
-import { getMachineIpMap } from "./fly.ts";
+import { getMachineIpMap, watchPortReachable } from "./fly.ts";
 import type { DirectConnectionData, ProxyData } from "./types.ts";
-
 type WebSocketData = ProxyData | DirectConnectionData;
 
 // Type guards
@@ -112,6 +112,22 @@ export class ContainerServer {
           // Register websocket based on its type
           if (isDirectConnection(ws.data)) {
             this.activeWs.set(ws.data.wsId, ws);
+
+            const stop = watchPortReachable("localhost", 5174, async (open) => {
+              if (open) {
+                console.log("🔓 포트가 열렸습니다!");
+                ws.send(JSON.stringify({
+                  data: { success: true, data: {
+                      type: 'port',
+                      data: { port: 5174, type: 'open' }
+                    } 
+                  }
+                }));
+              } else {
+                console.log("🔒 포트가 닫혔습니다!");
+              }
+            });
+
           } else if (isProxyConnection(ws.data)) {
             const targetUrl = ws.data.targetUrl;
             const targetSocket = new WebSocket(targetUrl);
