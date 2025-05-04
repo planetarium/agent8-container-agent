@@ -23,7 +23,7 @@ import type {
   WatchPathsOperation,
   WatchResponse,
 } from "../protocol/src/index.ts";
-import { getMachineIpMap, watchPortReachable } from "./fly.ts";
+import { getMachineIpMap } from "./fly.ts";
 import type { DirectConnectionData, ProxyData } from "./types.ts";
 type WebSocketData = ProxyData | DirectConnectionData;
 
@@ -44,6 +44,7 @@ export class ContainerServer {
   private readonly fileWatchClients: Map<string, Set<ServerWebSocket<unknown>>>;
   private readonly clientWatchers: Map<ServerWebSocket<unknown>, Set<string>>;
   private readonly activeWs: Map<string, ServerWebSocket<WebSocketData>>;
+  private readonly portScanner: PortScanner;
   private readonly processClients: Map<number, Set<ServerWebSocket<unknown>>>;
   private readonly config: {
     port: number;
@@ -67,6 +68,30 @@ export class ContainerServer {
     this.fileWatchClients = new Map();
     this.processClients = new Map();
     this.clientWatchers = new Map();
+    this.portScanner = new PortScanner({
+      scanIntervalMs: 2000,  // 2초마다 스캔
+      enableLogging: false   // 로깅 활성화
+    });
+
+    this.portScanner.start().then(() => {
+      console.log('스캐너가 시작되었습니다.');
+    });
+
+    this.portScanner.on('portAdded', (port) => {
+      console.log("🔓 포트가 열렸습니다!" + port.port);
+      console.log("ws: " + this.activeWs.size);
+      this.activeWs.forEach((ws : ServerWebSocket<WebSocketData>) => {
+        console.log("ws: " + ws.readyState);
+        const status = ws.send(JSON.stringify({
+        data: { success: true, data: {
+            type: 'port',
+            data: { port: port.port, type: 'open' }
+          } 
+        }
+      }));
+      console.log(status);
+    });
+    });
 
     console.info("Starting server on port", config.port);
 
@@ -112,21 +137,6 @@ export class ContainerServer {
           // Register websocket based on its type
           if (isDirectConnection(ws.data)) {
             this.activeWs.set(ws.data.wsId, ws);
-
-            const stop = watchPortReachable("localhost", 5174, async (open) => {
-              if (open) {
-                console.log("🔓 포트가 열렸습니다!");
-                ws.send(JSON.stringify({
-                  data: { success: true, data: {
-                      type: 'port',
-                      data: { port: 5174, type: 'open' }
-                    } 
-                  }
-                }));
-              } else {
-                console.log("🔒 포트가 닫혔습니다!");
-              }
-            });
 
           } else if (isProxyConnection(ws.data)) {
             const targetUrl = ws.data.targetUrl;
