@@ -25,6 +25,7 @@ import type {
 } from "../protocol/src/index.ts";
 import { getMachineIpMap } from "./fly.ts";
 import type { DirectConnectionData, ProxyData } from "./types.ts";
+import { CandidatePort } from "./portScanner";
 type WebSocketData = ProxyData | DirectConnectionData;
 
 // Type guards
@@ -77,20 +78,17 @@ export class ContainerServer {
       console.log('스캐너가 시작되었습니다.');
     });
 
-    this.portScanner.on('portAdded', (port) => {
-      console.log("🔓 포트가 열렸습니다!" + port.port);
+    this.portScanner.on('portAdded', (event: CandidatePort) => {
+      console.log("🔓 포트가 열렸습니다!" + event.port);
       console.log("ws: " + this.activeWs.size);
-      this.activeWs.forEach((ws : ServerWebSocket<WebSocketData>) => {
-        console.log("ws: " + ws.readyState);
-        const status = ws.send(JSON.stringify({
-        data: { success: true, data: {
-            type: 'port',
-            data: { port: port.port, type: 'open' }
-          } 
-        }
+      const firstSocket = this.activeWs.values().next().value;
+      firstSocket.send(JSON.stringify({
+      data: { success: true, data: {
+          type: 'port',
+          data: { port: event.port, type: 'open', url: "https://naver.com" }
+        } 
+      }
       }));
-      console.log(status);
-    });
     });
 
     console.info("Starting server on port", config.port);
