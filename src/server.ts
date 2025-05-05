@@ -497,6 +497,11 @@ export class ContainerServer {
       this.notifyProcess(pid, "stdout", decoded);
     });
 
+    childProcess.stderr.on("data", (chunk) => {
+      const decoded = textDecoder.decode(chunk);
+      this.notifyProcess(pid, "stderr", decoded);
+    });
+
     childProcess.on("exit", (code) => {
       this.notifyProcess(pid, "exit", String(code ?? 0));
       this.processClients.delete(pid);
