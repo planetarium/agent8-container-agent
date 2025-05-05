@@ -37,6 +37,39 @@ function isDirectConnection(data: WebSocketData): data is DirectConnectionData {
   return data && "wsId" in data;
 }
 
+// CORS 미들웨어 함수
+function corsMiddleware(handler: (req: Request) => Promise<Response> | Response) {
+  return async (req: Request) => {
+    // OPTIONS 요청 처리
+    if (req.method === 'OPTIONS') {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'POST, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+          'Access-Control-Max-Age': '86400'
+        }
+      });
+    }
+
+    // 실제 요청 처리
+    const response = await handler(req);
+    
+    // CORS 헤더 추가
+    const headers = new Headers(response.headers);
+    headers.set('Access-Control-Allow-Origin', '*');
+    headers.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers
+    });
+  };
+}
+
 export class ContainerServer {
   private readonly server: Server;
   private readonly processes: Map<number, ChildProcess>;
@@ -77,11 +110,10 @@ export class ContainerServer {
     this.machineId = config.machineId;
 
     this.portScanner = new PortScanner({
-      scanIntervalMs: 2000,  // 2초마다 스캔
-      enableLogging: false   // 로깅 활성화
+      scanIntervalMs: 2000,
+      enableLogging: false
     });
 
-    // Initialize Fly client
     this.flyClientPromise = initializeFlyClient({
       apiToken: process.env.FLY_API_TOKEN || '',
       appName: process.env.FLY_APP_NAME || '',
@@ -133,10 +165,18 @@ export class ContainerServer {
       port: config.port,
       routes: {
         "/api/machine": {
-          POST: async req => {
+          POST: async (req: Request) => {
             const authHeader = req.headers.get("authorization");
             if (!authHeader || !authHeader.startsWith("Bearer ")) {
-              return Response.json({ error: 'Authorization header with Bearer token is required' }, { status: 400 });
+              return new Response(JSON.stringify({ error: 'Authorization header with Bearer token is required' }), { 
+                status: 400,
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Access-Control-Allow-Origin': '*',
+                  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+                  'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+                }
+              });
             }
             const token = authHeader.replace(/^Bearer /, "");
             const options = {
@@ -170,13 +210,45 @@ export class ContainerServer {
             };
             const flyClient = await this.flyClientPromise;
             const machine = await flyClient.createMachine(options, token);
-            return Response.json({ machine_id: machine.id });
+            return new Response(JSON.stringify({ machine_id: machine.id }), {
+              headers: {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Methods': 'POST, OPTIONS',
+                'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+              }
+            });
+          },
+          OPTIONS: (req: Request) => {
+            return new Response(null, {
+              status: 204,
+              headers: {
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Methods': 'POST, OPTIONS',
+                'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+                'Access-Control-Max-Age': '86400'
+              }
+            });
           }
         }
       },
       fetch: async (req, server) => {
         const { pathname } = new URL(req.url);
 
+        // Handle CORS preflight requests
+        if (req.method === 'OPTIONS') {
+          return new Response(null, {
+            status: 204,
+            headers: {
+              'Access-Control-Allow-Origin': '*',
+              'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+              'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+              'Access-Control-Max-Age': '86400'
+            }
+          });
+        }
+
+        console.log("pathname", pathname);
         if (pathname.startsWith("/proxy/")) {
           const url = new URL(req.url);
           const portParam = url.searchParams.get('port');
@@ -185,7 +257,14 @@ export class ContainerServer {
           const flyClient = await this.flyClientPromise;
           const ip = await flyClient.getMachineIp(target);
           if (!ip) {
-            return new Response("Machine not found", { status: 404 });
+            return new Response("Machine not found", { 
+              status: 404,
+              headers: {
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+                'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+              }
+            });
           }
           const isPreview = rest[0] === "preview";
           const targetUrl = isPreview
@@ -196,12 +275,22 @@ export class ContainerServer {
             return;
           }
           if (isPreview) {
-            const proxiedResponse = fetch(targetUrl, {
+            const proxiedResponse = await fetch(targetUrl, {
               method: req.method,
               headers: req.headers,
               body: req.body,
             });
-            return proxiedResponse;
+            const response = new Response(proxiedResponse.body, {
+              status: proxiedResponse.status,
+              statusText: proxiedResponse.statusText,
+              headers: {
+                ...Object.fromEntries(Array.from(proxiedResponse.headers.entries())),
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+                'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+              }
+            });
+            return response;
           }
         } else if (
           server.upgrade(req, {
@@ -212,7 +301,14 @@ export class ContainerServer {
         ) {
           return;
         }
-        return new Response("Upgrade failed", { status: 400 });
+        return new Response("Upgrade failed", { 
+          status: 400,
+          headers: {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+          }
+        });
       },
       websocket: {
         message: (ws: ServerWebSocket<WebSocketData>, message) => {
