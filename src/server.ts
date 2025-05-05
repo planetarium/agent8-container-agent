@@ -15,7 +15,6 @@ import type {
   ContainerResponseWithId,
   FileSystemOperation,
   FileSystemTree,
-  PreviewOperation,
   ProcessEventMessage,
   ProcessOperation,
   ProcessResponse,
@@ -41,7 +40,6 @@ export class ContainerServer {
   private readonly server: Server;
   private readonly processes: Map<number, ChildProcess>;
   private readonly fileSystemWatchers: Map<string, FSWatcher>;
-  private readonly previewPorts: Map<string, number>;
   private readonly fileWatchClients: Map<string, Set<ServerWebSocket<unknown>>>;
   private readonly clientWatchers: Map<ServerWebSocket<unknown>, Set<string>>;
   private readonly activeWs: Map<string, ServerWebSocket<WebSocketData>>;
@@ -64,7 +62,6 @@ export class ContainerServer {
     this.config = config;
     this.processes = new Map();
     this.fileSystemWatchers = new Map();
-    this.previewPorts = new Map();
     this.activeWs = new Map();
     this.fileWatchClients = new Map();
     this.processClients = new Map();
@@ -240,11 +237,6 @@ export class ContainerServer {
           case "resize":
             response = await this.handleProcessOperation(operation, ws);
             break;
-          case "server-ready":
-          case "port":
-          case "preview-message":
-            response = this.handlePreviewOperation(operation);
-            break;
           case "watch":
           case "watch-paths":
             response = await this.handleWatchOperation(operation, ws);
@@ -405,51 +397,6 @@ export class ContainerServer {
           message: error instanceof Error ? error.message : "Unknown error occurred",
         },
       });
-    }
-  }
-
-  private handlePreviewOperation(operation: PreviewOperation): ContainerResponse<PreviewOperation> {
-    try {
-      const { type, data } = operation;
-      const port = 5174;
-      const machineId = "3287ee6c367938";
-      const url = `https://${machineId}.local-credentialless.webcontainer-api.io`;
-
-      switch (type) {
-        case "server-ready":
-          return { success: true, data: { 
-            type: 'server-ready',
-            data: { port: port, url: url }
-          }};
-        case "port": {
-          if (data?.port && data?.previewId) {
-            this.previewPorts.set(data.previewId, data.port);
-          }
-          return { success: true, data: {
-            type: 'port',
-            data: { port: port, type: 'open', url: url }
-          } };
-        }
-        case "preview-message": {
-          if (data?.error && this.config.forwardPreviewErrors) {
-            process.stderr.write(`Preview error: ${data.error}\n`);
-          }
-          return { success: true, data: {
-            type: 'preview-message'
-          } };
-        }
-        default:
-          throw new Error(`Unsupported preview operation: ${type}`);
-      }
-    } catch (error) {
-      console.error("error", error);
-      return {
-        success: false,
-        error: {
-          code: "preview_error",
-          message: error instanceof Error ? error.message : "Unknown error",
-        },
-      };
     }
   }
 
