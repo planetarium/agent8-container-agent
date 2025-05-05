@@ -1,6 +1,5 @@
 import process from "node:process";
 
-
 interface Machine {
   id: string;
   // biome-ignore lint/style/useNamingConvention: https://fly.io/docs/machines/api/machines-resource/#machine-properties

@@ -80,15 +80,20 @@ export class ContainerServer {
 
     this.portScanner.on('portAdded', (event: CandidatePort) => {
       console.log("🔓 포트가 열렸습니다!" + event.port);
-      console.log("ws: " + this.activeWs.size);
+      const port = 5174;
+      const machineId = "3287ee6c367938";
+      const url = `https://${machineId}.local-credentialless.webcontainer-api.io`;
       const firstSocket = this.activeWs.values().next().value;
-      firstSocket.send(JSON.stringify({
-      data: { success: true, data: {
-          type: 'port',
-          data: { port: event.port, type: 'open', url: "https://naver.com" }
-        } 
+
+      if (firstSocket) {
+        firstSocket.send(JSON.stringify({
+        data: { success: true, data: {
+            type: 'port',
+            data: { port: event.port, type: 'open', url: url }
+          }
+        }
+        }));
       }
-      }));
     });
 
     console.info("Starting server on port", config.port);
@@ -135,7 +140,6 @@ export class ContainerServer {
           // Register websocket based on its type
           if (isDirectConnection(ws.data)) {
             this.activeWs.set(ws.data.wsId, ws);
-
           } else if (isProxyConnection(ws.data)) {
             const targetUrl = ws.data.targetUrl;
             const targetSocket = new WebSocket(targetUrl);
