@@ -12,7 +12,13 @@ function main() {
     workdirName: process.env.WORKDIR_NAME || "/workspace",
     coep: process.env.COEP || "credentialless",
     forwardPreviewErrors: process.env.FORWARD_PREVIEW_ERRORS === "true",
+    appHostName: process.env.APP_HOST_NAME || "localhost",
+    machineId: process.env.FLY_MACHINE_ID || "",
   };
+
+  if (process.env.FLY_APP_NAME) {
+    config.appHostName = `${process.env.FLY_APP_NAME}.fly.dev`;
+  }
 
   const server = new ContainerServer(config);
   updateMachineMap();

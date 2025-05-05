@@ -50,7 +50,6 @@ export interface ContainerRequest {
 export type ContainerOperation =
   | FileSystemOperation
   | ProcessOperation
-  | PreviewOperation
   | WatchOperation
   | WatchPathsOperation
   | AuthOperation;
@@ -110,17 +109,6 @@ export interface ProcessEventMessage {
   pid: number;
   stream: string;
   data: string;
-}
-
-export interface PreviewOperation {
-  type: 'server-ready' | 'port' | 'preview-message';
-  data?: {
-    port?: number;
-    type?: string;
-    url?: string;
-    previewId?: string;
-    error?: string;
-  };
 }
 
 export interface WatchOperation {

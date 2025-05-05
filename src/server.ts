@@ -2,6 +2,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import type { Dirent, Stats } from "node:fs";
 import { glob, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { join, normalize } from "node:path";
+import { PortScanner } from "./portScanner/portScanner.ts";
 import process from "node:process";
 import type { Server, ServerWebSocket } from "bun";
 import chokidar, { type FSWatcher } from "chokidar";
@@ -14,7 +15,6 @@ import type {
   ContainerResponseWithId,
   FileSystemOperation,
   FileSystemTree,
-  PreviewOperation,
   ProcessEventMessage,
   ProcessOperation,
   ProcessResponse,
@@ -24,7 +24,7 @@ import type {
 } from "../protocol/src/index.ts";
 import { getMachineIpMap } from "./fly.ts";
 import type { DirectConnectionData, ProxyData } from "./types.ts";
-
+import { CandidatePort } from "./portScanner";
 type WebSocketData = ProxyData | DirectConnectionData;
 
 // Type guards
@@ -40,33 +40,84 @@ export class ContainerServer {
   private readonly server: Server;
   private readonly processes: Map<number, ChildProcess>;
   private readonly fileSystemWatchers: Map<string, FSWatcher>;
-  private readonly previewPorts: Map<string, number>;
   private readonly fileWatchClients: Map<string, Set<ServerWebSocket<unknown>>>;
   private readonly clientWatchers: Map<ServerWebSocket<unknown>, Set<string>>;
   private readonly activeWs: Map<string, ServerWebSocket<WebSocketData>>;
+  private readonly portScanner: PortScanner;
   private readonly processClients: Map<number, Set<ServerWebSocket<unknown>>>;
   private readonly config: {
     port: number;
     workdirName: string;
     coep: string;
     forwardPreviewErrors: boolean;
+    appHostName: string;
   };
   private authToken: string | undefined;
+  private appHostName: string;
+  private machineId: string;
 
   constructor(config: {
     port: number;
     workdirName: string;
     coep: string;
     forwardPreviewErrors: boolean;
+    appHostName: string;
+    machineId: string;
   }) {
     this.config = config;
     this.processes = new Map();
     this.fileSystemWatchers = new Map();
-    this.previewPorts = new Map();
     this.activeWs = new Map();
     this.fileWatchClients = new Map();
     this.processClients = new Map();
     this.clientWatchers = new Map();
+    this.appHostName = config.appHostName;
+    this.machineId = config.machineId;
+
+    this.portScanner = new PortScanner({
+      scanIntervalMs: 2000,  // 2초마다 스캔
+      enableLogging: false   // 로깅 활성화
+    });
+
+    this.portScanner.start().then(() => {
+      console.log('스캐너가 시작되었습니다.');
+    });
+
+    this.portScanner.on('portAdded', (event: CandidatePort) => {
+      console.log("🔓 포트가 열렸습니다!" + event.port);
+      const url = `https://${this.appHostName}/proxy/${this.machineId}/preview/?port=${event.port}`;
+      const message = JSON.stringify({
+        data: {
+          success: true,
+          data: {
+            type: 'port',
+            data: { port: event.port, type: 'open', url }
+          }
+        }
+      });
+
+      for (const socket of this.activeWs.values()) {
+        socket.send(message);
+      }
+    });
+
+    this.portScanner.on('portRemoved', (event: CandidatePort) => {
+      console.log("🔓 포트가 닫혔습니다!" + event.port);
+      const url = `https://${this.appHostName}/proxy/${this.machineId}/preview/?port=${event.port}`;
+      const message = JSON.stringify({
+        data: {
+          success: true,
+          data: {
+            type: 'port',
+            data: { port: event.port, type: 'close', url }
+          }
+        }
+      });
+
+      for (const socket of this.activeWs.values()) {
+        socket.send(message);
+      }
+    });
 
     console.info("Starting server on port", config.port);
 
@@ -76,11 +127,14 @@ export class ContainerServer {
         const { pathname } = new URL(req.url);
 
         if (pathname.startsWith("/proxy/")) {
+          const url = new URL(req.url);
+          const portParam = url.searchParams.get('port');
+          const httpPort = portParam ? parseInt(portParam, 10) : 5174;
           const machinemap = getMachineIpMap();
           const [, , target, ...rest] = pathname.split("/");
           const isPreview = rest[0] === "preview";
           const targetUrl = isPreview
-            ? `http://[${machinemap[target]}]:5174/${rest.slice(1).join("/")}`
+            ? `http://[${machinemap[target]}]:${httpPort}/${rest.slice(1).join("/")}`
             : `ws://[${machinemap[target]}]:3000/${rest.join("/")}`;
 
           if (server.upgrade(req, { data: { targetUrl } })) {
@@ -106,7 +160,13 @@ export class ContainerServer {
         return new Response("Upgrade failed", { status: 400 });
       },
       websocket: {
-        message: (ws: ServerWebSocket<WebSocketData>, message) => this.handleMessage(ws, message),
+        message: (ws: ServerWebSocket<WebSocketData>, message) => {
+          if (isDirectConnection(ws.data)) {
+            this.handleMessage(ws, message);
+          } else if (isProxyConnection(ws.data)) {
+            ws.data.targetSocket?.send(message);
+          }
+        },
         open: (ws: ServerWebSocket<WebSocketData>) => {
           // WebSocket connection opened
           // Register websocket based on its type
@@ -191,11 +251,6 @@ export class ContainerServer {
           case "kill":
           case "resize":
             response = await this.handleProcessOperation(operation, ws);
-            break;
-          case "server-ready":
-          case "port":
-          case "preview-message":
-            response = this.handlePreviewOperation(operation);
             break;
           case "watch":
           case "watch-paths":
@@ -357,40 +412,6 @@ export class ContainerServer {
           message: error instanceof Error ? error.message : "Unknown error occurred",
         },
       });
-    }
-  }
-
-  private handlePreviewOperation(operation: PreviewOperation): ContainerResponse<null> {
-    try {
-      const { type, data } = operation;
-
-      switch (type) {
-        case "server-ready":
-          return { success: true, data: null };
-        case "port": {
-          if (data?.port && data?.previewId) {
-            this.previewPorts.set(data.previewId, data.port);
-          }
-          return { success: true, data: null };
-        }
-        case "preview-message": {
-          if (data?.error && this.config.forwardPreviewErrors) {
-            process.stderr.write(`Preview error: ${data.error}\n`);
-          }
-          return { success: true, data: null };
-        }
-        default:
-          throw new Error(`Unsupported preview operation: ${type}`);
-      }
-    } catch (error) {
-      console.error("error", error);
-      return {
-        success: false,
-        error: {
-          code: "preview_error",
-          message: error instanceof Error ? error.message : "Unknown error",
-        },
-      };
     }
   }
 

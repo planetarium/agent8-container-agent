@@ -20,7 +20,6 @@ WORKDIR /app
 
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/package.json ./
-COPY --from=builder /app/preview.ts ./
 
 RUN bun install --production --frozen-lockfile
 
@@ -32,6 +31,8 @@ ENV PORT=3000 \
 
 WORKDIR /workspace
 
+COPY --from=builder /app/preview.ts ./
+
 EXPOSE 3000
 
-ENTRYPOINT ["sh", "-c", "bun /app/preview.ts & bun /app/dist/index.js"]
+ENTRYPOINT ["bun", "/app/dist/index.js"]
