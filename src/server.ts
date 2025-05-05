@@ -497,7 +497,32 @@ export class ContainerServer {
     args: string[],
     ws: ServerWebSocket<WebSocketData>,
   ): ContainerResponse<ProcessResponse> {
-    const childProcess = spawn(command, args, {
+    // Use the Node.js PTY wrapper for terminal emulation
+    // First try the container path, then fallback to local development path
+    let ptyWrapperPath = '/app/pty-wrapper/dist/index.js';
+
+    // Check if file exists using Node.js methods - more reliable across environments
+    try {
+      require.resolve(ptyWrapperPath);
+    } catch (error) {
+      // Fallback to local development path
+      ptyWrapperPath = join(process.cwd(), 'pty-wrapper/dist/index.js');
+    }
+
+    // Default terminal size
+    const cols = 80;
+    const rows = 24;
+
+    // Create command for PTY wrapper
+    const ptyArgs = [
+      ptyWrapperPath,
+      `--cols=${cols}`,
+      `--rows=${rows}`,
+      command,
+      ...args
+    ];
+
+    const childProcess = spawn('node', ptyArgs, {
       cwd: this.config.workdirName,
       stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env, coep: this.config.coep },
@@ -582,10 +607,19 @@ export class ContainerServer {
     return { success: true, data: null };
   }
 
-  private resizeTerminal(pid: number, _cols: number, _rows: number): ContainerResponse<null> {
+  private resizeTerminal(pid: number, cols: number, rows: number): ContainerResponse<null> {
     const targetProcess = this.processes.get(pid);
     if (!targetProcess) {
       throw new Error(`Process ${pid} not found`);
+    }
+
+    // Send resize message to the process
+    if (targetProcess.send) {
+      targetProcess.send({
+        type: 'resize',
+        cols,
+        rows
+      });
     }
 
     return { success: true, data: null };
