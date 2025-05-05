@@ -11,7 +11,13 @@ RUN bun run build
 FROM oven/bun:1.2.10-slim
 
 # install zsh
-RUN apt-get update && apt-get install -y zsh && apt-get clean
+RUN apt-get update && apt-get install -y zsh curl && apt-get clean
+
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs && \
+    npm install -g npm@latest && \
+    npm install -g pnpm vite typescript ts-node && \
+    apt-get clean
 
 # copy .zshrc
 COPY .zshrc /root/.zshrc
@@ -27,7 +33,8 @@ RUN bun install --production --frozen-lockfile
 ENV PORT=3000 \
     WORKDIR_NAME=/workspace \
     COEP=credentialless \
-    FORWARD_PREVIEW_ERRORS=true
+    FORWARD_PREVIEW_ERRORS=true \
+    NODE_ENV=development
 
 WORKDIR /workspace
 
