@@ -151,7 +151,13 @@ export class ContainerServer {
         return new Response("Upgrade failed", { status: 400 });
       },
       websocket: {
-        message: (ws: ServerWebSocket<WebSocketData>, message) => this.handleMessage(ws, message),
+        message: (ws: ServerWebSocket<WebSocketData>, message) => {
+          if (isDirectConnection(ws.data)) {
+            this.handleMessage(ws, message);
+          } else if (isProxyConnection(ws.data)) {
+            ws.data.targetSocket?.send(message);
+          }
+        },
         open: (ws: ServerWebSocket<WebSocketData>) => {
           // WebSocket connection opened
           // Register websocket based on its type
