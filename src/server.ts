@@ -80,19 +80,39 @@ export class ContainerServer {
 
     this.portScanner.on('portAdded', (event: CandidatePort) => {
       console.log("🔓 포트가 열렸습니다!" + event.port);
-      const port = 5174;
       const machineId = "3287ee6c367938";
       const url = `https://${machineId}.local-credentialless.webcontainer-api.io`;
-      const firstSocket = this.activeWs.values().next().value;
-
-      if (firstSocket) {
-        firstSocket.send(JSON.stringify({
-        data: { success: true, data: {
+      const message = JSON.stringify({
+        data: {
+          success: true,
+          data: {
             type: 'port',
             data: { port: event.port, type: 'open', url: url }
           }
         }
-        }));
+      });
+
+      for (const socket of this.activeWs.values()) {
+        socket.send(message);
+      }
+    });
+
+    this.portScanner.on('portRemoved', (event: CandidatePort) => {
+      console.log("🔓 포트가 닫혔습니다!" + event.port);
+      const machineId = "3287ee6c367938";
+      const url = `https://${machineId}.local-credentialless.webcontainer-api.io`;
+      const message = JSON.stringify({
+        data: {
+          success: true,
+          data: {
+            type: 'port',
+            data: { port: event.port, type: 'close', url: url }
+          }
+        }
+      })
+
+      for (const socket of this.activeWs.values()) {
+        socket.send(message);
       }
     });
 
