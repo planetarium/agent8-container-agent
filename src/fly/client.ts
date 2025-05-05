@@ -106,4 +106,8 @@ export class FlyClient {
     });
     return machine?.ipv6 ?? null;
   }
+
+  async getImageRef(): Promise<string | undefined> {
+    return this.config.imageRef;
+  }
 } 

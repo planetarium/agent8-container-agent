@@ -57,5 +57,6 @@ export interface CreateMachineOptions {
 export interface FlyConfig {
   apiToken: string;
   appName: string;
+  imageRef?: string;
   baseUrl?: string;
 } 
