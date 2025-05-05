@@ -50,14 +50,19 @@ export class ContainerServer {
     workdirName: string;
     coep: string;
     forwardPreviewErrors: boolean;
+    appHostName: string;
   };
   private authToken: string | undefined;
+  private appHostName: string;
+  private machineId: string;
 
   constructor(config: {
     port: number;
     workdirName: string;
     coep: string;
     forwardPreviewErrors: boolean;
+    appHostName: string;
+    machineId: string;
   }) {
     this.config = config;
     this.processes = new Map();
@@ -66,6 +71,9 @@ export class ContainerServer {
     this.fileWatchClients = new Map();
     this.processClients = new Map();
     this.clientWatchers = new Map();
+    this.appHostName = config.appHostName;
+    this.machineId = config.machineId;
+
     this.portScanner = new PortScanner({
       scanIntervalMs: 2000,  // 2초마다 스캔
       enableLogging: false   // 로깅 활성화
@@ -77,14 +85,13 @@ export class ContainerServer {
 
     this.portScanner.on('portAdded', (event: CandidatePort) => {
       console.log("🔓 포트가 열렸습니다!" + event.port);
-      const machineId = "3287ee6c367938";
-      const url = `https://${machineId}.local-credentialless.webcontainer-api.io`;
+      const url = `https://${this.appHostName}/proxy/${this.machineId}/preview/?port=${event.port}`;
       const message = JSON.stringify({
         data: {
           success: true,
           data: {
             type: 'port',
-            data: { port: event.port, type: 'open', url: url }
+            data: { port: event.port, type: 'open', url }
           }
         }
       });
@@ -96,17 +103,16 @@ export class ContainerServer {
 
     this.portScanner.on('portRemoved', (event: CandidatePort) => {
       console.log("🔓 포트가 닫혔습니다!" + event.port);
-      const machineId = "3287ee6c367938";
-      const url = `https://${machineId}.local-credentialless.webcontainer-api.io`;
+      const url = `https://${this.appHostName}/proxy/${this.machineId}/preview/?port=${event.port}`;
       const message = JSON.stringify({
         data: {
           success: true,
           data: {
             type: 'port',
-            data: { port: event.port, type: 'close', url: url }
+            data: { port: event.port, type: 'close', url }
           }
         }
-      })
+      });
 
       for (const socket of this.activeWs.values()) {
         socket.send(message);
@@ -121,11 +127,14 @@ export class ContainerServer {
         const { pathname } = new URL(req.url);
 
         if (pathname.startsWith("/proxy/")) {
+          const url = new URL(req.url);
+          const portParam = url.searchParams.get('port');
+          const httpPort = portParam ? parseInt(portParam, 10) : 5174;
           const machinemap = getMachineIpMap();
           const [, , target, ...rest] = pathname.split("/");
           const isPreview = rest[0] === "preview";
           const targetUrl = isPreview
-            ? `http://[${machinemap[target]}]:5174/${rest.slice(1).join("/")}`
+            ? `http://[${machinemap[target]}]:${httpPort}/${rest.slice(1).join("/")}`
             : `ws://[${machinemap[target]}]:3000/${rest.join("/")}`;
 
           if (server.upgrade(req, { data: { targetUrl } })) {
