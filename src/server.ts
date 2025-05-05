@@ -22,9 +22,10 @@ import type {
   WatchPathsOperation,
   WatchResponse,
 } from "../protocol/src/index.ts";
-import { getMachineIpMap } from "./fly.ts";
+import { initializeFlyClient } from "./fly";
 import type { DirectConnectionData, ProxyData } from "./types.ts";
 import { CandidatePort } from "./portScanner";
+
 type WebSocketData = ProxyData | DirectConnectionData;
 
 // Type guards
@@ -55,6 +56,7 @@ export class ContainerServer {
   private authToken: string | undefined;
   private appHostName: string;
   private machineId: string;
+  private flyClientPromise: Promise<any>;
 
   constructor(config: {
     port: number;
@@ -77,6 +79,12 @@ export class ContainerServer {
     this.portScanner = new PortScanner({
       scanIntervalMs: 2000,  // 2초마다 스캔
       enableLogging: false   // 로깅 활성화
+    });
+
+    // Initialize Fly client
+    this.flyClientPromise = initializeFlyClient({
+      apiToken: process.env.FLY_API_TOKEN || '',
+      appName: process.env.FLY_APP_NAME || '',
     });
 
     this.portScanner.start().then(() => {
@@ -123,19 +131,66 @@ export class ContainerServer {
 
     this.server = globalThis.Bun.serve({
       port: config.port,
-      fetch: (req, server) => {
+      routes: {
+        "/api/machine": {
+          POST: async req => {
+            const authHeader = req.headers.get("authorization");
+            if (!authHeader || !authHeader.startsWith("Bearer ")) {
+              return Response.json({ error: 'Authorization header with Bearer token is required' }, { status: 400 });
+            }
+            const token = authHeader.replace(/^Bearer /, "");
+            const options = {
+              name,
+              image: "registry.fly.io/agent8-container:deployment-01JTFWKGMV20ZPTXWZ2J483G8T",
+              region: "nrt",
+              env: {
+                FLY_PROCESS_GROUP: "app",
+                PORT: "3000",
+                PRIMARY_REGION: "nrt"
+              },
+              services: [
+                {
+                  protocol: "tcp",
+                  internal_port: 3000,
+                  ports: [
+                    { port: 80, handlers: ["http"] },
+                    { port: 443, handlers: ["tls", "http"] }
+                  ]
+                }
+              ],
+              resources: {
+                cpu_kind: "shared",
+                cpus: 1,
+                memory_mb: 1024
+              },
+              restart: {
+                policy: "on-failure",
+                max_retries: 10
+              }
+            };
+            const flyClient = await this.flyClientPromise;
+            const machine = await flyClient.createMachine(options, token);
+            return Response.json({ machine_id: machine.id });
+          }
+        }
+      },
+      fetch: async (req, server) => {
         const { pathname } = new URL(req.url);
 
         if (pathname.startsWith("/proxy/")) {
           const url = new URL(req.url);
           const portParam = url.searchParams.get('port');
           const httpPort = portParam ? parseInt(portParam, 10) : 5174;
-          const machinemap = getMachineIpMap();
           const [, , target, ...rest] = pathname.split("/");
+          const flyClient = await this.flyClientPromise;
+          const ip = await flyClient.getMachineIp(target);
+          if (!ip) {
+            return new Response("Machine not found", { status: 404 });
+          }
           const isPreview = rest[0] === "preview";
           const targetUrl = isPreview
-            ? `http://[${machinemap[target]}]:${httpPort}/${rest.slice(1).join("/")}`
-            : `ws://[${machinemap[target]}]:3000/${rest.join("/")}`;
+            ? `http://[${ip}]:5174/${rest.slice(1).join("/")}`
+            : `ws://[${ip}]:3000/${rest.join("/")}`;
 
           if (server.upgrade(req, { data: { targetUrl } })) {
             return;
@@ -720,4 +775,9 @@ async function mount(mountPath: string, tree: FileSystemTree) {
       await mount(fullPath, item.directory);
     }
   }
+}
+
+function generateRandomName() {
+  // Generate a simple, meaningless 8-character random alphanumeric string
+  return Math.random().toString(36).substring(2, 10);
 }

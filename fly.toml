@@ -1,20 +1,30 @@
-app = "fly-summer-log-9042"
-primary_region = "nrt"
+# fly.toml app configuration file generated for agent8-container on 2025-05-05T17:17:02+09:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'agent8-container'
+primary_region = 'nrt'
 
 [build]
-dockerfile = "Containerfile"
+  dockerfile = 'Containerfile'
 
 [env]
-  PORT = "3000"
+  PORT = '3000'
 
 [[services]]
+  protocol = 'tcp'
   internal_port = 3000
-  protocol = "tcp"
 
   [[services.ports]]
     port = 80
-    handlers = ["http"]
+    handlers = ['http']
 
   [[services.ports]]
     port = 443
-    handlers = ["tls", "http"]
+    handlers = ['tls', 'http']
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1

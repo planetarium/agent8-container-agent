@@ -12,9 +12,11 @@
     "check-all": "bun check && bun test && bunx tsc --noEmit"
   },
   "dependencies": {
+    "@prisma/client": "^6.7.0",
     "chokidar": "^4.0.3",
     "dotenv": "^16.5.0",
     "eventemitter3": "^5.0.1",
+    "prisma": "^6.7.0",
     "zod": "^3.24.3"
   },
   "devDependencies": {
