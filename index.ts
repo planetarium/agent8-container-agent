@@ -13,6 +13,7 @@ function main() {
     forwardPreviewErrors: process.env.FORWARD_PREVIEW_ERRORS === "true",
     appHostName: process.env.APP_HOST_NAME || "localhost",
     machineId: process.env.FLY_MACHINE_ID || "",
+    processGroup: process.env.FLY_PROCESS_GROUP || "app",
   };
 
   if (process.env.FLY_APP_NAME) {

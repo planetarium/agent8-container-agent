@@ -88,12 +88,18 @@ export class ContainerServer {
     forwardPreviewErrors: boolean;
     appHostName: string;
     machineId: string;
+    processGroup: string;
   };
   private authToken: string | undefined;
   private appHostName: string;
   private machineId: string;
   private flyClientPromise: Promise<FlyClient>;
   private readonly authManager: AuthManager;
+  private readonly connectionLastActivityTime: Map<string, number>;
+  private machineLastActivityTime: number | null = null;
+  private cleanupInterval: NodeJS.Timeout | null = null;
+  private readonly connectionTestInterval = 60000; // 1 minute
+  private readonly machineDestroyInterval = 300000; // 5 minutes
 
   constructor(config: {
     port: number;
@@ -102,6 +108,7 @@ export class ContainerServer {
     forwardPreviewErrors: boolean;
     appHostName: string;
     machineId: string;
+    processGroup: string;
   }) {
     this.config = config;
     this.processes = new Map();
@@ -110,6 +117,7 @@ export class ContainerServer {
     this.fileWatchClients = new Map();
     this.processClients = new Map();
     this.clientWatchers = new Map();
+    this.connectionLastActivityTime = new Map();
     this.appHostName = config.appHostName;
     this.machineId = config.machineId;
     this.authManager = new AuthManager({
@@ -169,6 +177,11 @@ export class ContainerServer {
 
     console.info("Starting server on port", config.port);
 
+    this.machineLastActivityTime = Date.now();
+    if (!this.cleanupInterval) {
+      this.cleanupInterval = setInterval(() => this.checkTimeouts(), this.connectionTestInterval);
+    }
+
     this.server = globalThis.Bun.serve({
       port: config.port,
       routes: {
@@ -190,7 +203,7 @@ export class ContainerServer {
               image,
               region: "nrt",
               env: {
-                FLY_PROCESS_GROUP: "app",
+                FLY_PROCESS_GROUP: "worker",
                 PORT: "3000",
                 PRIMARY_REGION: "nrt"
               },
@@ -370,6 +383,9 @@ export class ContainerServer {
     ws: ServerWebSocket<WebSocketData>,
     message: string | Buffer,
   ): Promise<void> {
+    if (isDirectConnection(ws.data)) {
+      this.connectionLastActivityTime.set(ws.data.wsId, Date.now());
+    }
     console.debug(message);
 
     try {
@@ -400,6 +416,9 @@ export class ContainerServer {
             break;
           case "auth":
             response = await this.handleAuthOperation(operation);
+            break;
+          case "heartbeat":
+            response = { success: true, data: null };
             break;
           default:
             response = {
@@ -629,18 +648,80 @@ export class ContainerServer {
     }
   }
 
-  stop(): void {
-    // Cleanup all processes
+  private checkTimeouts(): void {
+    const now = Date.now();
+
+    for (const [wsId, lastActivity] of this.connectionLastActivityTime.entries()) {
+      if (this.machineLastActivityTime && this.machineLastActivityTime < lastActivity) {
+        this.machineLastActivityTime = lastActivity;
+      }
+      if (now - lastActivity > this.connectionTestInterval) {
+        const ws = this.activeWs.get(wsId);
+        if (ws) {
+          console.info(`Connection ${wsId} timed out after ${this.connectionTestInterval}ms of inactivity`);
+          ws.close();
+          this.cleanupConnection(wsId);
+        }
+      }
+    }
+
+    if (this.activeWs.size === 0
+      && this.config.processGroup === "worker"
+      && this.machineLastActivityTime
+      && now - this.machineLastActivityTime > this.machineDestroyInterval
+    ) {
+      console.info("No active connections, stopping server");
+      this.stop();
+    }
+  }
+
+  private cleanupConnection(wsId: string): void {
+    this.activeWs.delete(wsId);
+    this.connectionLastActivityTime.delete(wsId);
+
+    // Kill all processes associated with this connection
+    for (const [pid, clients] of this.processClients.entries()) {
+      if (clients.size === 0) {
+        const process = this.processes.get(pid);
+        if (process) {
+          process.kill();
+          this.processes.delete(pid);
+        }
+      }
+    }
+
+    // Clean up file watchers
+    for (const [watcherId, clients] of this.fileWatchClients.entries()) {
+      if (clients.size === 0) {
+        const watcher = this.fileSystemWatchers.get(watcherId);
+        if (watcher) {
+          watcher.close();
+          this.fileSystemWatchers.delete(watcherId);
+        }
+        this.fileWatchClients.delete(watcherId);
+      }
+    }
+  }
+
+  public async stop(): Promise<void> {
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+    }
+
     for (const [pid, process] of this.processes.entries()) {
       process.kill();
       this.processes.delete(pid);
     }
 
-    // Cleanup watchers
     this.cleanup();
-
-    // Close the server
     this.server.stop();
+
+    if (this.flyClientPromise) {
+      const flyClient = await this.flyClientPromise;
+      await flyClient.destroyMachine(this.machineId);
+    }
+
+    process.exit(0);
   }
 
   private spawnProcess(
