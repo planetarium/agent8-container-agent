@@ -320,7 +320,35 @@ export class ContainerServer {
         ) {
           return;
         }
-        return new Response("Upgrade failed", { status: 400 });
+
+        // Proxy HTTP requests to localhost:5173 when WebSocket upgrade fails
+        try {
+          const url = new URL(req.url);
+          const targetUrl = `http://localhost:5173${url.pathname}${url.search}`;
+
+          console.log(`Proxying request to: ${targetUrl}`);
+
+          const proxyResponse = await fetch(targetUrl, {
+            method: req.method,
+            headers: req.headers,
+            body: req.body,
+          });
+
+          // Add CORS headers to the response
+          const headers = new Headers(proxyResponse.headers);
+          headers.set('Access-Control-Allow-Origin', '*');
+          headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+          headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+          return new Response(proxyResponse.body, {
+            status: proxyResponse.status,
+            statusText: proxyResponse.statusText,
+            headers: headers
+          });
+        } catch (error) {
+          console.error("Proxy error:", error);
+          return new Response("Proxy error occurred", { status: 500 });
+        }
       }),
       websocket: {
         message: (ws: ServerWebSocket<WebSocketData>, message) => {
