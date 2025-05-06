@@ -86,12 +86,14 @@ export class ContainerServer {
     workdirName: string;
     coep: string;
     forwardPreviewErrors: boolean;
-    appHostName: string;
+    routerDomain: string;
+    appName: string;
     machineId: string;
     processGroup: string;
   };
   private authToken: string | undefined;
-  private appHostName: string;
+  private routerDomain: string;
+  private appName: string;
   private machineId: string;
   private flyClientPromise: Promise<FlyClient>;
   private readonly authManager: AuthManager;
@@ -106,7 +108,8 @@ export class ContainerServer {
     workdirName: string;
     coep: string;
     forwardPreviewErrors: boolean;
-    appHostName: string;
+    routerDomain: string;
+    appName: string;
     machineId: string;
     processGroup: string;
   }) {
@@ -118,7 +121,8 @@ export class ContainerServer {
     this.processClients = new Map();
     this.clientWatchers = new Map();
     this.connectionLastActivityTime = new Map();
-    this.appHostName = config.appHostName;
+    this.routerDomain = config.routerDomain;
+    this.appName = config.appName;
     this.machineId = config.machineId;
     this.authManager = new AuthManager({
       authServerUrl: process.env.AUTH_SERVER_URL || 'https://v8-meme-api.verse8.io'
@@ -141,7 +145,7 @@ export class ContainerServer {
 
     this.portScanner.on('portAdded', (event: CandidatePort) => {
       console.log("🔓 포트가 열렸습니다!" + event.port);
-      const url = `https://${this.appHostName}/proxy/${this.machineId}/preview/?port=${event.port}`;
+      const url = `https://${this.appName}-${this.machineId}.${this.routerDomain}`;
       const message = JSON.stringify({
         data: {
           success: true,
@@ -159,7 +163,7 @@ export class ContainerServer {
 
     this.portScanner.on('portRemoved', (event: CandidatePort) => {
       console.log("🔓 포트가 닫혔습니다!" + event.port);
-      const url = `https://${this.appHostName}/proxy/${this.machineId}/preview/?port=${event.port}`;
+      const url = `https://${this.appName}-${this.machineId}.${this.routerDomain}`;
       const message = JSON.stringify({
         data: {
           success: true,
@@ -279,39 +283,7 @@ export class ContainerServer {
         }
       },
       fetch: corsMiddleware(async (req, server) => {
-        const { pathname } = new URL(req.url);
-
-        if (pathname.startsWith("/proxy/")) {
-          const url = new URL(req.url);
-          const portParam = url.searchParams.get('port');
-          const httpPort = portParam ? parseInt(portParam, 10) : 5174;
-          const [, , target, ...rest] = pathname.split("/");
-          const flyClient = await this.flyClientPromise;
-          const ip = await flyClient.getMachineIp(target);
-          if (!ip) {
-            return new Response("Machine not found", { status: 404 });
-          }
-          const isPreview = rest[0] === "preview";
-          const targetUrl = isPreview
-            ? `http://[${ip}]:${httpPort}/${rest.slice(1).join("/")}`
-            : `ws://[${ip}]:3000/${rest.join("/")}`;
-
-          if (server.upgrade(req, { data: { targetUrl } })) {
-            return;
-          }
-          if (isPreview) {
-            const proxiedResponse = await fetch(targetUrl, {
-              method: req.method,
-              headers: req.headers,
-              body: req.body,
-            });
-            return new Response(proxiedResponse.body, {
-              status: proxiedResponse.status,
-              statusText: proxiedResponse.statusText,
-              headers: new Headers(proxiedResponse.headers)
-            });
-          }
-        } else if (
+        if (
           server.upgrade(req, {
             data: {
               wsId: Math.random().toString(36).substring(7),
@@ -320,7 +292,41 @@ export class ContainerServer {
         ) {
           return;
         }
-        return new Response("Upgrade failed", { status: 400 });
+
+        // Proxy HTTP requests to localhost:5173 when WebSocket upgrade fails
+        try {
+          const url = new URL(req.url);
+          const targetUrl = `http://localhost:5173${url.pathname}${url.search}`;
+
+          console.log(`Proxying request to: ${targetUrl}`);
+
+          const proxyResponse = await fetch(targetUrl, {
+            method: req.method,
+            headers: req.headers,
+            body: req.body,
+          });
+
+          // Add CORS headers to the response
+          const headers = new Headers(proxyResponse.headers);
+          headers.set('Access-Control-Allow-Origin', '*');
+          headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+          headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+          // Allow embedding in iframes
+          headers.set('X-Frame-Options', 'ALLOWALL');
+          headers.set('Content-Security-Policy', "frame-ancestors *");
+          headers.set('Cross-Origin-Resource-Policy', 'cross-origin');
+          headers.set('Cross-Origin-Embedder-Policy', 'require-corp');
+
+          return new Response(proxyResponse.body, {
+            status: proxyResponse.status,
+            statusText: proxyResponse.statusText,
+            headers: headers
+          });
+        } catch (error) {
+          console.error("Proxy error:", error);
+          return new Response("Proxy error occurred", { status: 500 });
+        }
       }),
       websocket: {
         message: (ws: ServerWebSocket<WebSocketData>, message) => {
@@ -547,7 +553,7 @@ export class ContainerServer {
           if (!operation.command) {
             throw new Error("Command is required for spawn operation");
           }
-          return Promise.resolve(this.spawnProcess(operation.command, operation.args || [], ws));
+          return Promise.resolve(this.spawnProcess(operation.command, operation.args || [], ws, operation.options?.env));
         }
         case "input": {
           if (!(operation.pid && operation.data)) {
@@ -736,6 +742,7 @@ export class ContainerServer {
     command: string,
     args: string[],
     ws: ServerWebSocket<WebSocketData>,
+    env?: Record<string, string>,
   ): ContainerResponse<ProcessResponse> {
     // Use the Node.js PTY wrapper for terminal emulation
     // First try the container path, then fallback to local development path
@@ -765,7 +772,7 @@ export class ContainerServer {
     const childProcess = spawn('node', ptyArgs, {
       cwd: this.config.workdirName,
       stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, coep: this.config.coep },
+      env: { ...process.env, coep: this.config.coep, ...(env || {}) },
     });
 
     if (!(childProcess.stdin && childProcess.stdout && childProcess.pid)) {
