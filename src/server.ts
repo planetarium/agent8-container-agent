@@ -86,12 +86,14 @@ export class ContainerServer {
     workdirName: string;
     coep: string;
     forwardPreviewErrors: boolean;
-    appHostName: string;
+    routerDomain: string;
+    appName: string;
     machineId: string;
     processGroup: string;
   };
   private authToken: string | undefined;
-  private appHostName: string;
+  private routerDomain: string;
+  private appName: string;
   private machineId: string;
   private flyClientPromise: Promise<FlyClient>;
   private readonly authManager: AuthManager;
@@ -106,7 +108,8 @@ export class ContainerServer {
     workdirName: string;
     coep: string;
     forwardPreviewErrors: boolean;
-    appHostName: string;
+    routerDomain: string;
+    appName: string;
     machineId: string;
     processGroup: string;
   }) {
@@ -118,7 +121,8 @@ export class ContainerServer {
     this.processClients = new Map();
     this.clientWatchers = new Map();
     this.connectionLastActivityTime = new Map();
-    this.appHostName = config.appHostName;
+    this.routerDomain = config.routerDomain;
+    this.appName = config.appName;
     this.machineId = config.machineId;
     this.authManager = new AuthManager({
       authServerUrl: process.env.AUTH_SERVER_URL || 'https://v8-meme-api.verse8.io'
@@ -141,7 +145,7 @@ export class ContainerServer {
 
     this.portScanner.on('portAdded', (event: CandidatePort) => {
       console.log("🔓 포트가 열렸습니다!" + event.port);
-      const url = `https://${this.appHostName}/proxy/${this.machineId}/preview/?port=${event.port}`;
+      const url = `https://${this.appName}-${this.machineId}.${this.routerDomain}`;
       const message = JSON.stringify({
         data: {
           success: true,
@@ -159,7 +163,7 @@ export class ContainerServer {
 
     this.portScanner.on('portRemoved', (event: CandidatePort) => {
       console.log("🔓 포트가 닫혔습니다!" + event.port);
-      const url = `https://${this.appHostName}/proxy/${this.machineId}/preview/?port=${event.port}`;
+      const url = `https://${this.appName}-${this.machineId}.${this.routerDomain}`;
       const message = JSON.stringify({
         data: {
           success: true,
@@ -307,6 +311,12 @@ export class ContainerServer {
           headers.set('Access-Control-Allow-Origin', '*');
           headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
           headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+          // Allow embedding in iframes
+          headers.set('X-Frame-Options', 'ALLOWALL');
+          headers.set('Content-Security-Policy', "frame-ancestors *");
+          headers.set('Cross-Origin-Resource-Policy', 'cross-origin');
+          headers.set('Cross-Origin-Embedder-Policy', 'require-corp');
 
           return new Response(proxyResponse.body, {
             status: proxyResponse.status,
