@@ -135,7 +135,7 @@ export class ContainerServer {
 
     this.flyClientPromise = initializeFlyClient({
       apiToken: process.env.FLY_API_TOKEN || '',
-      appName: process.env.FLY_APP_NAME || '',
+      appName: process.env.TARGET_APP_NAME || '',
       imageRef: process.env.FLY_IMAGE_REF || '',
     });
 
