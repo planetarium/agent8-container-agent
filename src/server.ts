@@ -234,7 +234,7 @@ export class ContainerServer {
           }
           const isPreview = rest[0] === "preview";
           const targetUrl = isPreview
-            ? `http://[${ip}]:5174/${rest.slice(1).join("/")}`
+            ? `http://[${ip}]:${httpPort}/${rest.slice(1).join("/")}`
             : `ws://[${ip}]:3000/${rest.join("/")}`;
 
           if (server.upgrade(req, { data: { targetUrl } })) {
