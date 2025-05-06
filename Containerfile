@@ -10,8 +10,15 @@ RUN bun run build
 
 FROM oven/bun:1.2.10-slim
 
-# install zsh
-RUN apt-get update && apt-get install -y zsh curl && apt-get clean
+# install zsh and build dependencies for node-pty
+RUN apt-get update && apt-get install -y \
+    zsh \
+    curl \
+    python3 \
+    make \
+    g++ \
+    build-essential \
+    && apt-get clean
 
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     apt-get install -y nodejs && \
@@ -26,6 +33,10 @@ WORKDIR /app
 
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/package.json ./
+
+# Copy and build pty-wrapper
+COPY pty-wrapper /app/pty-wrapper
+RUN cd /app/pty-wrapper && npm install && npm run build
 
 RUN bun install --production --frozen-lockfile
 
