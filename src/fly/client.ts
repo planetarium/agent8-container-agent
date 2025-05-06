@@ -110,4 +110,33 @@ export class FlyClient {
   async getImageRef(): Promise<string | undefined> {
     return this.config.imageRef;
   }
-} 
+
+  /**
+   * Get real-time machine status from Fly API.
+   * @param machineId - The ID of the machine to check
+   * @returns Machine details and current status or null if not found
+   */
+  async getMachineStatus(machineId: string): Promise<Machine | null> {
+    try {
+      const res = await fetch(`${this.config.baseUrl}/apps/${this.config.appName}/machines/${machineId}`, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${this.config.apiToken}`,
+          Accept: "application/json",
+        },
+      });
+
+      if (!res.ok) {
+        if (res.status === 404) {
+          return null;
+        }
+        throw new Error(`HTTP ${res.status} - ${res.statusText}`);
+      }
+
+      return await res.json() as Machine;
+    } catch (e: unknown) {
+      console.error("Fly API error:", e instanceof Error ? e.message : e);
+      throw e;
+    }
+  }
+}

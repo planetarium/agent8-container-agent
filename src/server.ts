@@ -221,6 +221,40 @@ export class ContainerServer {
           OPTIONS: corsMiddleware((req: Request) => {
             return new Response(null, { status: 204 });
           })
+        },
+        "/api/machine/:id": {
+          GET: corsMiddleware(async (req: Request) => {
+            const token = this.authManager.extractTokenFromHeader(req.headers.get("authorization"));
+            if (!token || !(await this.authManager.verifyToken(token))) {
+              return Response.json({ error: "Invalid or missing authorization token" }, { status: 401 });
+            }
+
+            const machineId = (req as any).params.id;
+
+            try {
+              const flyClient = await this.flyClientPromise;
+
+              // Get machine status directly from Fly API
+              const machine = await flyClient.getMachineStatus(machineId);
+              if (!machine) {
+                return Response.json({ error: "Machine not found" }, { status: 404 });
+              }
+
+              return Response.json({
+                success: true,
+                machine,
+              });
+            } catch (error) {
+              console.error("Error retrieving machine:", error);
+              return Response.json({
+                error: "Error occurred while retrieving machine",
+                details: error instanceof Error ? error.message : "Unknown error"
+              }, { status: 500 });
+            }
+          }),
+          OPTIONS: corsMiddleware((req: Request) => {
+            return new Response(null, { status: 204 });
+          })
         }
       },
       fetch: corsMiddleware(async (req, server) => {
