@@ -17,7 +17,7 @@ export class AuthManager {
 
     try {
       const response = await fetch(`${this.authServerUrl}/v1/auth/verify`, {
-        method: 'POST',
+        method: 'GET',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
@@ -29,8 +29,7 @@ export class AuthManager {
         return false;
       }
 
-      const result = await response.json();
-      return result.valid === true;
+      return await response.json();
     } catch (error) {
       console.error('Error verifying token:', error);
       return false;
