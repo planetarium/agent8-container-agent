@@ -64,7 +64,7 @@ export class FlyClient {
   }
 
   /**
-   * Soft deletes a machine by setting the deleted field to true in the database.
+   * Destroys a machine by deleting it from the database and the Fly API.
    */
   async destroyMachine(machineId: string): Promise<void> {
     try {
@@ -75,6 +75,19 @@ export class FlyClient {
     } catch (e: unknown) {
       console.error("DB error (soft delete):", e instanceof Error ? e.message : e);
       throw e;
+    }
+
+    const res = await fetch(`${this.config.baseUrl}/apps/${this.config.appName}/machines/${machineId}?force=true`, {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${this.config.apiToken}`,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      }
+    });
+
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status} - ${res.statusText}`);
     }
   }
 
