@@ -553,7 +553,7 @@ export class ContainerServer {
           if (!operation.command) {
             throw new Error("Command is required for spawn operation");
           }
-          return Promise.resolve(this.spawnProcess(operation.command, operation.args || [], ws));
+          return Promise.resolve(this.spawnProcess(operation.command, operation.args || [], ws, operation.options?.env));
         }
         case "input": {
           if (!(operation.pid && operation.data)) {
@@ -742,6 +742,7 @@ export class ContainerServer {
     command: string,
     args: string[],
     ws: ServerWebSocket<WebSocketData>,
+    env?: Record<string, string>,
   ): ContainerResponse<ProcessResponse> {
     // Use the Node.js PTY wrapper for terminal emulation
     // First try the container path, then fallback to local development path
@@ -771,7 +772,7 @@ export class ContainerServer {
     const childProcess = spawn('node', ptyArgs, {
       cwd: this.config.workdirName,
       stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, coep: this.config.coep },
+      env: { ...process.env, coep: this.config.coep, ...(env || {}) },
     });
 
     if (!(childProcess.stdin && childProcess.stdout && childProcess.pid)) {
