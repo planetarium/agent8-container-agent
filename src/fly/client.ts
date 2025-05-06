@@ -35,7 +35,7 @@ export class FlyClient {
             env: options.env,
             services: options.services,
             mounts: options.mounts,
-            resources: options.resources,
+            guest: options.resources,
           },
         }),
       });
