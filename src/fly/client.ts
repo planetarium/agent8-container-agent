@@ -1,4 +1,4 @@
-import { FlyConfig, Machine, MachineMap, CreateMachineOptions } from './types';
+import { FlyConfig, Machine, CreateMachineOptions } from './types';
 import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();

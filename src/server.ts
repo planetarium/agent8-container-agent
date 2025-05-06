@@ -22,7 +22,7 @@ import type {
   WatchPathsOperation,
   WatchResponse,
 } from "../protocol/src/index.ts";
-import { initializeFlyClient } from "./fly";
+import { FlyClient, initializeFlyClient } from "./fly";
 import type { DirectConnectionData, ProxyData } from "./types.ts";
 import { CandidatePort } from "./portScanner";
 import { AuthManager } from './auth';
@@ -57,7 +57,7 @@ function corsMiddleware(handler: (req: Request, server?: any) => Promise<Respons
     // 실제 요청 처리
     const response = await handler(req, server);
     if (!response) return;
-    
+
     // CORS 헤더 추가
     const headers = new Headers(response.headers);
     headers.set('Access-Control-Allow-Origin', '*');
@@ -92,7 +92,7 @@ export class ContainerServer {
   private authToken: string | undefined;
   private appHostName: string;
   private machineId: string;
-  private flyClientPromise: Promise<any>;
+  private flyClientPromise: Promise<FlyClient>;
   private readonly authManager: AuthManager;
 
   constructor(config: {
@@ -180,10 +180,14 @@ export class ContainerServer {
             }
 
             const flyClient = await this.flyClientPromise;
+            const image = await flyClient.getImageRef();
+            if (!image) {
+              return Response.json({ error: "No image found" }, { status: 500 });
+            }
 
             const options = {
               name: generateRandomName(),
-              image: await flyClient.getImageRef(),
+              image,
               region: "nrt",
               env: {
                 FLY_PROCESS_GROUP: "app",
