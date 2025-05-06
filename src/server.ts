@@ -22,7 +22,7 @@ import type {
   WatchPathsOperation,
   WatchResponse,
 } from "../protocol/src/index.ts";
-import { initializeFlyClient } from "./fly";
+import { FlyClient, initializeFlyClient } from "./fly";
 import type { DirectConnectionData, ProxyData } from "./types.ts";
 import { CandidatePort } from "./portScanner";
 import { AuthManager } from './auth';
@@ -57,7 +57,7 @@ function corsMiddleware(handler: (req: Request, server?: any) => Promise<Respons
     // 실제 요청 처리
     const response = await handler(req, server);
     if (!response) return;
-    
+
     // CORS 헤더 추가
     const headers = new Headers(response.headers);
     headers.set('Access-Control-Allow-Origin', '*');
@@ -92,7 +92,7 @@ export class ContainerServer {
   private authToken: string | undefined;
   private appHostName: string;
   private machineId: string;
-  private flyClientPromise: Promise<any>;
+  private flyClientPromise: Promise<FlyClient>;
   private readonly authManager: AuthManager;
 
   constructor(config: {
@@ -180,10 +180,14 @@ export class ContainerServer {
             }
 
             const flyClient = await this.flyClientPromise;
+            const image = await flyClient.getImageRef();
+            if (!image) {
+              return Response.json({ error: "No image found" }, { status: 500 });
+            }
 
             const options = {
               name: generateRandomName(),
-              image: await flyClient.getImageRef(),
+              image,
               region: "nrt",
               env: {
                 FLY_PROCESS_GROUP: "app",
@@ -217,6 +221,40 @@ export class ContainerServer {
           OPTIONS: corsMiddleware((req: Request) => {
             return new Response(null, { status: 204 });
           })
+        },
+        "/api/machine/:id": {
+          GET: corsMiddleware(async (req: Request) => {
+            const token = this.authManager.extractTokenFromHeader(req.headers.get("authorization"));
+            if (!token || !(await this.authManager.verifyToken(token))) {
+              return Response.json({ error: "Invalid or missing authorization token" }, { status: 401 });
+            }
+
+            const machineId = (req as any).params.id;
+
+            try {
+              const flyClient = await this.flyClientPromise;
+
+              // Get machine status directly from Fly API
+              const machine = await flyClient.getMachineStatus(machineId);
+              if (!machine) {
+                return Response.json({ error: "Machine not found" }, { status: 404 });
+              }
+
+              return Response.json({
+                success: true,
+                machine,
+              });
+            } catch (error) {
+              console.error("Error retrieving machine:", error);
+              return Response.json({
+                error: "Error occurred while retrieving machine",
+                details: error instanceof Error ? error.message : "Unknown error"
+              }, { status: 500 });
+            }
+          }),
+          OPTIONS: corsMiddleware((req: Request) => {
+            return new Response(null, { status: 204 });
+          })
         }
       },
       fetch: corsMiddleware(async (req, server) => {
@@ -234,7 +272,7 @@ export class ContainerServer {
           }
           const isPreview = rest[0] === "preview";
           const targetUrl = isPreview
-            ? `http://[${ip}]:5174/${rest.slice(1).join("/")}`
+            ? `http://[${ip}]:${httpPort}/${rest.slice(1).join("/")}`
             : `ws://[${ip}]:3000/${rest.join("/")}`;
 
           if (server.upgrade(req, { data: { targetUrl } })) {
