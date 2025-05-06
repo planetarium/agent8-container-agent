@@ -47,7 +47,7 @@ function corsMiddleware(handler: (req: Request, server?: any) => Promise<Respons
         status: 204,
         headers: {
           'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'POST, OPTIONS',
+          'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
           'Access-Control-Allow-Headers': 'Content-Type, Authorization',
           'Access-Control-Max-Age': '86400'
         }
@@ -61,7 +61,7 @@ function corsMiddleware(handler: (req: Request, server?: any) => Promise<Respons
     // CORS 헤더 추가
     const headers = new Headers(response.headers);
     headers.set('Access-Control-Allow-Origin', '*');
-    headers.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
     headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
     return new Response(response.body, {
@@ -253,7 +253,15 @@ export class ContainerServer {
             }
           }),
           OPTIONS: corsMiddleware((req: Request) => {
-            return new Response(null, { status: 204 });
+            return new Response(null, {
+              status: 204,
+              headers: {
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+                'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+                'Access-Control-Max-Age': '86400'
+              }
+            });
           })
         }
       },
