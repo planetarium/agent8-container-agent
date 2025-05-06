@@ -279,39 +279,7 @@ export class ContainerServer {
         }
       },
       fetch: corsMiddleware(async (req, server) => {
-        const { pathname } = new URL(req.url);
-
-        if (pathname.startsWith("/proxy/")) {
-          const url = new URL(req.url);
-          const portParam = url.searchParams.get('port');
-          const httpPort = portParam ? parseInt(portParam, 10) : 5174;
-          const [, , target, ...rest] = pathname.split("/");
-          const flyClient = await this.flyClientPromise;
-          const ip = await flyClient.getMachineIp(target);
-          if (!ip) {
-            return new Response("Machine not found", { status: 404 });
-          }
-          const isPreview = rest[0] === "preview";
-          const targetUrl = isPreview
-            ? `http://[${ip}]:${httpPort}/${rest.slice(1).join("/")}`
-            : `ws://[${ip}]:3000/${rest.join("/")}`;
-
-          if (server.upgrade(req, { data: { targetUrl } })) {
-            return;
-          }
-          if (isPreview) {
-            const proxiedResponse = await fetch(targetUrl, {
-              method: req.method,
-              headers: req.headers,
-              body: req.body,
-            });
-            return new Response(proxiedResponse.body, {
-              status: proxiedResponse.status,
-              statusText: proxiedResponse.statusText,
-              headers: new Headers(proxiedResponse.headers)
-            });
-          }
-        } else if (
+        if (
           server.upgrade(req, {
             data: {
               wsId: Math.random().toString(36).substring(7),
