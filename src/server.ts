@@ -22,9 +22,11 @@ import type {
   WatchPathsOperation,
   WatchResponse,
 } from "../protocol/src/index.ts";
-import { getMachineIpMap } from "./fly.ts";
+import { initializeFlyClient } from "./fly";
 import type { DirectConnectionData, ProxyData } from "./types.ts";
 import { CandidatePort } from "./portScanner";
+import { AuthManager } from './auth';
+
 type WebSocketData = ProxyData | DirectConnectionData;
 
 // Type guards
@@ -34,6 +36,40 @@ function isProxyConnection(data: WebSocketData): data is ProxyData {
 
 function isDirectConnection(data: WebSocketData): data is DirectConnectionData {
   return data && "wsId" in data;
+}
+
+// CORS 미들웨어 함수
+function corsMiddleware(handler: (req: Request, server?: any) => Promise<Response | undefined> | Response | undefined) {
+  return async (req: Request, server?: any) => {
+    // OPTIONS 요청 처리
+    if (req.method === 'OPTIONS') {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'POST, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+          'Access-Control-Max-Age': '86400'
+        }
+      });
+    }
+
+    // 실제 요청 처리
+    const response = await handler(req, server);
+    if (!response) return;
+    
+    // CORS 헤더 추가
+    const headers = new Headers(response.headers);
+    headers.set('Access-Control-Allow-Origin', '*');
+    headers.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers
+    });
+  };
 }
 
 export class ContainerServer {
@@ -51,10 +87,13 @@ export class ContainerServer {
     coep: string;
     forwardPreviewErrors: boolean;
     appHostName: string;
+    machineId: string;
   };
   private authToken: string | undefined;
   private appHostName: string;
   private machineId: string;
+  private flyClientPromise: Promise<any>;
+  private readonly authManager: AuthManager;
 
   constructor(config: {
     port: number;
@@ -73,10 +112,19 @@ export class ContainerServer {
     this.clientWatchers = new Map();
     this.appHostName = config.appHostName;
     this.machineId = config.machineId;
+    this.authManager = new AuthManager({
+      authServerUrl: process.env.AUTH_SERVER_URL || 'https://v8-meme-api.verse8.io'
+    });
 
     this.portScanner = new PortScanner({
-      scanIntervalMs: 2000,  // 2초마다 스캔
-      enableLogging: false   // 로깅 활성화
+      scanIntervalMs: 2000,
+      enableLogging: false
+    });
+
+    this.flyClientPromise = initializeFlyClient({
+      apiToken: process.env.FLY_API_TOKEN || '',
+      appName: process.env.FLY_APP_NAME || '',
+      imageRef: process.env.FLY_IMAGE_REF || '',
     });
 
     this.portScanner.start().then(() => {
@@ -123,30 +171,86 @@ export class ContainerServer {
 
     this.server = globalThis.Bun.serve({
       port: config.port,
-      fetch: (req, server) => {
+      routes: {
+        "/api/machine": {
+          POST: corsMiddleware(async (req: Request) => {
+            const token = this.authManager.extractTokenFromHeader(req.headers.get("authorization"));
+            if (!token || !(await this.authManager.verifyToken(token))) {
+              return Response.json({ error: "Invalid or missing authorization token" }, { status: 401 });
+            }
+
+            const flyClient = await this.flyClientPromise;
+
+            const options = {
+              name: generateRandomName(),
+              image: await flyClient.getImageRef(),
+              region: "nrt",
+              env: {
+                FLY_PROCESS_GROUP: "app",
+                PORT: "3000",
+                PRIMARY_REGION: "nrt"
+              },
+              services: [
+                {
+                  protocol: "tcp",
+                  internal_port: 3000,
+                  ports: [
+                    { port: 80, handlers: ["http"] },
+                    { port: 443, handlers: ["tls", "http"] }
+                  ]
+                }
+              ],
+              resources: {
+                cpu_kind: "shared",
+                cpus: 1,
+                memory_mb: 1024
+              },
+              restart: {
+                policy: "on-failure",
+                max_retries: 10
+              }
+            };
+
+            const machine = await flyClient.createMachine(options, token);
+            return Response.json({ machine_id: machine.id });
+          }),
+          OPTIONS: corsMiddleware((req: Request) => {
+            return new Response(null, { status: 204 });
+          })
+        }
+      },
+      fetch: corsMiddleware(async (req, server) => {
         const { pathname } = new URL(req.url);
 
         if (pathname.startsWith("/proxy/")) {
           const url = new URL(req.url);
           const portParam = url.searchParams.get('port');
           const httpPort = portParam ? parseInt(portParam, 10) : 5174;
-          const machinemap = getMachineIpMap();
           const [, , target, ...rest] = pathname.split("/");
+          const flyClient = await this.flyClientPromise;
+          const ip = await flyClient.getMachineIp(target);
+          if (!ip) {
+            return new Response("Machine not found", { status: 404 });
+          }
           const isPreview = rest[0] === "preview";
           const targetUrl = isPreview
-            ? `http://[${machinemap[target]}]:${httpPort}/${rest.slice(1).join("/")}`
-            : `ws://[${machinemap[target]}]:3000/${rest.join("/")}`;
+            ? `http://[${ip}]:5174/${rest.slice(1).join("/")}`
+            : `ws://[${ip}]:3000/${rest.join("/")}`;
 
           if (server.upgrade(req, { data: { targetUrl } })) {
             return;
           }
           if (isPreview) {
-            const proxiedResponse = fetch(targetUrl, {
+            const proxiedResponse = await fetch(targetUrl, {
               method: req.method,
               headers: req.headers,
               body: req.body,
             });
-            return proxiedResponse;
+            return new Response(proxiedResponse.body, {
+              status: proxiedResponse.status,
+              statusText: proxiedResponse.statusText,
+              headers: new Headers(proxiedResponse.headers)
+            });
           }
         } else if (
           server.upgrade(req, {
@@ -158,7 +262,7 @@ export class ContainerServer {
           return;
         }
         return new Response("Upgrade failed", { status: 400 });
-      },
+      }),
       websocket: {
         message: (ws: ServerWebSocket<WebSocketData>, message) => {
           if (isDirectConnection(ws.data)) {
@@ -257,7 +361,7 @@ export class ContainerServer {
             response = await this.handleWatchOperation(operation, ws);
             break;
           case "auth":
-            response = this.handleAuthOperation(operation);
+            response = await this.handleAuthOperation(operation);
             break;
           default:
             response = {
@@ -457,13 +561,22 @@ export class ContainerServer {
     }
   }
 
-  private handleAuthOperation(operation: AuthOperation): ContainerResponse<null> {
+  private async handleAuthOperation(operation: AuthOperation): Promise<ContainerResponse<null>> {
     try {
       const { type, token } = operation;
 
       if (type === "auth" && token) {
-        this.authToken = token;
-        return { success: true, data: null };
+        if (await this.authManager.verifyToken(token)) {
+          this.authToken = token;
+          return { success: true, data: null };
+        }
+        return {
+          success: false,
+          error: {
+            code: "auth_error",
+            message: "Invalid token",
+          },
+        };
       }
 
       throw new Error(`Unsupported auth operation: ${type}`);
@@ -754,4 +867,9 @@ async function mount(mountPath: string, tree: FileSystemTree) {
       await mount(fullPath, item.directory);
     }
   }
+}
+
+function generateRandomName() {
+  // Generate a simple, meaningless 8-character random alphanumeric string
+  return Math.random().toString(36).substring(2, 10);
 }

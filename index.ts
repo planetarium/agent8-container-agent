@@ -1,5 +1,4 @@
 import process from "node:process";
-import { updateMachineMap } from "@/fly";
 import { ContainerServer } from "@/server";
 import dotenv from "dotenv";
 
@@ -21,7 +20,6 @@ function main() {
   }
 
   const server = new ContainerServer(config);
-  updateMachineMap();
 
   try {
     // Handle shutdown gracefully
