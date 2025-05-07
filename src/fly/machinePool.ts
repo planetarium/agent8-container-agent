@@ -136,20 +136,12 @@ export class MachinePool {
         }
       };
 
-      const machine = await this.flyClient.createMachine(options, 'pool');
+      const machine = await this.flyClient.createMachine(options);
       if (!machine || !machine.id) {
         console.error('Failed to create machine: No machine or machine ID returned');
         return null;
       }
 
-      const dbRecord = {
-        machine_id: machine.id,
-        ipv6: machine.private_ip || '',
-        is_available: true,
-        deleted: false
-      };
-
-      await prisma.machine_pool.create({ data: dbRecord });
       return machine.id;
     } catch (error) {
       console.error('Error creating new machine:', error);
