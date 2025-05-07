@@ -3,7 +3,7 @@
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = 'agent8-controller'
+app = 'agent8-container-pool'
 primary_region = 'nrt'
 
 [build]
