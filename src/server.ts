@@ -922,7 +922,6 @@ export class ContainerServer {
         const fileContent = includeContent && stats?.isFile()
           ? await readFile(filePath)
           : null;
-
         this.notifyFileChange(watcherId, eventType, filePath, fileContent);
       } catch (err) {
         console.error(`Error watching file: ${err instanceof Error ? err.message : 'Unknown error'}`);
@@ -1002,6 +1001,10 @@ export class ContainerServer {
 }
 
 export function ensureSafePath(workdir: string, userPath: string): string {
+  if (userPath.startsWith(workdir)) {
+    return userPath;
+  }
+
   const normalizedPath = normalize(join(workdir, userPath));
   const normalizedWorkdir = normalize(workdir);
 
