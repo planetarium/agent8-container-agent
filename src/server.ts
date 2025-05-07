@@ -837,6 +837,8 @@ export class ContainerServer {
     }
 
     if (this.machinePool) {
+      // Release the machine back to the pool instead of destroying it
+      await this.machinePool.releaseMachine(this.machineId);
       this.machinePool.stop();
     }
 
@@ -847,11 +849,6 @@ export class ContainerServer {
 
     this.cleanup();
     this.server.stop();
-
-    if (this.flyClientPromise) {
-      const flyClient = await this.flyClientPromise;
-      await flyClient.destroyMachine(this.machineId);
-    }
 
     process.exit(0);
   }
