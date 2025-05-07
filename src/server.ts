@@ -1,11 +1,10 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import type { Dirent, Stats } from "node:fs";
-import { glob, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { join, normalize } from "node:path";
 import { PortScanner } from "./portScanner/portScanner.ts";
-import process, { cwd } from "node:process";
+import process from "node:process";
 import type { Server, ServerWebSocket } from "bun";
-import chokidar, { MatchFunction, type FSWatcher } from "chokidar";
+import chokidar, { type FSWatcher } from "chokidar";
 import { minimatch } from 'minimatch';
 import type {
   AuthOperation,
@@ -897,7 +896,7 @@ export class ContainerServer {
           return true;
         }
 
-        if (minimatch(path, include)) {
+        if (minimatch(path, include, { dot: true })) {
           return false;
         }
 
