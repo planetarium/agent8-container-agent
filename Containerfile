@@ -45,12 +45,12 @@ RUN cd /app/pty-wrapper && npm install && npm run build
 RUN bun install --production --frozen-lockfile
 # Set default environment variables
 ENV PORT=3000 \
-    WORKDIR_NAME=/workspace \
+    WORKDIR_NAME=/home/project \
     COEP=credentialless \
     FORWARD_PREVIEW_ERRORS=true \
     NODE_ENV=development
 
-WORKDIR /workspace
+WORKDIR /home/project
 
 EXPOSE 3000
 

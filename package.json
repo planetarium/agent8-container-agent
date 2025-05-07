@@ -16,6 +16,7 @@
     "chokidar": "^4.0.3",
     "dotenv": "^16.5.0",
     "eventemitter3": "^5.0.1",
+    "minimatch": "^10.0.1",
     "prisma": "^6.7.0",
     "zod": "^3.24.3"
   },

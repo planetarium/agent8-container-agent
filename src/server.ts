@@ -1,11 +1,12 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import type { Dirent, Stats } from "node:fs";
-import { glob, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { Dirent, Stats } from "node:fs";
+import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { join, normalize } from "node:path";
 import { PortScanner } from "./portScanner/portScanner.ts";
 import process from "node:process";
 import type { Server, ServerWebSocket } from "bun";
 import chokidar, { type FSWatcher } from "chokidar";
+import { minimatch } from 'minimatch';
 import type {
   AuthOperation,
   BufferEncoding,
@@ -20,6 +21,7 @@ import type {
   ProcessResponse,
   WatchOperation,
   WatchPathsOperation,
+  WatchPathsOptions,
   WatchResponse,
 } from "../protocol/src/index.ts";
 import { FlyClient, initializeFlyClient } from "./fly";
@@ -687,19 +689,20 @@ export class ContainerServer {
         // Handle watch-paths operation
         const options = operation.options || {};
         if (options.include && options.include.length > 0) {
-          // Watch included patterns
-          for (const pattern of options.include) {
-            const fsWatcher = await this.watchFiles(watcherId, pattern, { persistent: true });
-            this.fileSystemWatchers.set(watcherId, fsWatcher);
-            this.registerWatchClient(watcherId, ws);
-          }
-        }
-      } else {
-        for (const pattern of operation.options?.patterns || []) {
-          const fsWatcher = await this.watchFiles(watcherId, pattern, operation.options || {});
+          const fsWatcher = await this.watchFiles(watcherId, options);
           this.fileSystemWatchers.set(watcherId, fsWatcher);
           this.registerWatchClient(watcherId, ws);
         }
+      } else {
+        const options = {
+          include: operation.options?.patterns || [],
+          exclude: [],
+          ignoreInitial: false,
+          includeContent: false,
+        }
+        const fsWatcher = await this.watchFiles(watcherId, options);
+        this.fileSystemWatchers.set(watcherId, fsWatcher);
+        this.registerWatchClient(watcherId, ws);
       }
 
       return {
@@ -859,6 +862,7 @@ export class ContainerServer {
       cwd: this.config.workdirName,
       stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env, coep: this.config.coep, ...(env || {}) },
+      detached: true,
     });
 
     if (!(childProcess.stdin && childProcess.stdout && childProcess.pid)) {
@@ -969,43 +973,74 @@ export class ContainerServer {
     return { success: true, data: null };
   }
 
-  private async watchFiles(watcherId: string, pattern: string, options: { persistent?: boolean }): Promise<FSWatcher> {
-    const files = await Array.fromAsync(glob(pattern, { cwd: this.config.workdirName }));
-    const watcher = chokidar.watch(files, {
-      persistent: options.persistent ?? true,
-      ignoreInitial: true,
-      cwd: this.config.workdirName,
+  private async watchFiles(watcherId: string, options: WatchPathsOptions): Promise<FSWatcher> {
+    console.info("watchFiles", options);
+    const watcher = chokidar.watch(this.config.workdirName, {
+      persistent: true,
+      ignoreInitial: options.ignoreInitial,
+      ignored: (path) => {
+        if (path === this.config.workdirName) {
+          return false;
+        }
+
+        if (options.exclude && options.exclude.length > 0 && options.exclude.some(excludePattern => minimatch(path, excludePattern))) {
+          console.log("excluded", path);
+          return true;
+        }
+
+        if (options.include && options.include.length > 0 && options.include.some(includePattern => minimatch(path, includePattern, { dot: true }))) {
+          console.log("included", path);
+          return false;
+        }
+
+        const relPath = path.replace(this.config.workdirName, '').replace(/^\/+/, '');
+        const isParentOfPattern = options.include && options.include.length > 0 && options.include.some(includePattern => includePattern.startsWith(relPath + '/') || includePattern.includes('/' + relPath + '/'));
+
+        if (isParentOfPattern) {
+          return false;
+        }
+
+        return true;
+      },
       awaitWriteFinish: {
         stabilityThreshold: 300,
         pollInterval: 100,
       },
     });
 
-    watcher.on("all", (eventName, filePath) => {
-      const eventType = this.mapChokidarEventToNodeEvent(eventName);
-      const filename = filePath.replace(`${this.config.workdirName}/`, "");
-
-      this.notifyFileChange(watcherId, eventType, filename);
+    watcher.on("all", async (eventName, filePath, stats) => {
+      const eventType = this.mapChokidarEvent(eventName);
+      try {
+        const fileContent = options.includeContent && stats?.isFile()
+          ? await readFile(filePath)
+          : null;
+        this.notifyFileChange(watcherId, eventType, filePath, fileContent);
+      } catch (err) {
+        console.error(`Error watching file: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      }
     });
 
     return watcher;
   }
 
-  private mapChokidarEventToNodeEvent(chokidarEvent: string): string {
-    // Map chokidar events to Node.js fs.watch events
+  private mapChokidarEvent(chokidarEvent: string): string {
     switch (chokidarEvent) {
       case "add":
+        return "add_file";
       case "change":
         return "change";
       case "unlink":
+        return "remove_file";
+      case "addDir":
+        return "add_dir";
       case "unlinkDir":
-        return "rename";
+        return "remove_dir";
       default:
-        return chokidarEvent;
+        return "update_directory";
     }
   }
 
-  private notifyFileChange(watcherId: string, eventType: string, filename: string | null): void {
+  private notifyFileChange(watcherId: string, eventType: string, filename: string | null, buffer: Uint8Array | null): void {
     const clients = this.fileWatchClients.get(watcherId);
 
     if (!clients || clients.size === 0) {
@@ -1020,6 +1055,7 @@ export class ContainerServer {
         watcherId,
         eventType,
         filename,
+        buffer: buffer ? Buffer.from(buffer).toString('base64') : null,
       },
     };
 
@@ -1057,6 +1093,10 @@ export class ContainerServer {
 }
 
 export function ensureSafePath(workdir: string, userPath: string): string {
+  if (userPath.startsWith(workdir)) {
+    return userPath;
+  }
+
   const normalizedPath = normalize(join(workdir, userPath));
   const normalizedWorkdir = normalize(workdir);
 
