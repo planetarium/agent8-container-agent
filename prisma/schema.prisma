@@ -15,3 +15,14 @@ model machine {
   deleted    Boolean? @default(false)
   ipv6       String?  @db.VarChar
 }
+
+model machine_pool {
+  id         String   @id @default(uuid())
+  created_at DateTime @default(now())
+  machine_id String?
+  deleted    Boolean  @default(false)
+  ipv6       String?
+  assigned_to String?
+  assigned_at DateTime?
+  is_available Boolean @default(true)
+}
