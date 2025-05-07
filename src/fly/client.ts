@@ -27,10 +27,9 @@ export class FlyClient {
 
   /**
    * Creates a Fly machine and records it in the database.
-   * @param options - Machine creation options (must include user token)
-   * @param token - User token to associate with the machine
+   * @param options - Machine creation options
    */
-  async createMachine(options: CreateMachineOptions, token: string, retry: number = 0): Promise<Machine> {
+  async createMachine(options: CreateMachineOptions, retry: number = 0): Promise<Machine> {
     try {
       const res = await fetch(`${this.config.baseUrl}/apps/${this.config.appName}/machines`, {
         method: "POST",
@@ -56,7 +55,7 @@ export class FlyClient {
         if (retry < this.RETRY_LIMIT) {
           await new Promise(resolve => setTimeout(resolve, 1000));
           const randomIdx = Math.floor(Math.random() * this.fallbackRegions.length);
-          return this.createMachine({ ...options, region: this.fallbackRegions[randomIdx] }, token, retry + 1);
+          return this.createMachine({ ...options, region: this.fallbackRegions[randomIdx] }, retry + 1);
         }
         throw new Error(`HTTP ${res.status} - ${res.statusText}`);
       }
@@ -65,13 +64,13 @@ export class FlyClient {
 
       // Extract relevant fields for DB
       const dbRecord = {
-        token,
         machine_id: machine.id,
         ipv6: machine.private_ip || '',
         deleted: false,
+        is_available: true,
         created_at: new Date(machine.created_at || Date.now()),
       };
-      await prisma.machine.create({ data: dbRecord });
+      await prisma.machine_pool.create({ data: dbRecord });
 
       return machine;
     } catch (e: unknown) {
@@ -85,7 +84,7 @@ export class FlyClient {
    */
   async destroyMachine(machineId: string): Promise<void> {
     try {
-      await prisma.machine.updateMany({
+      await prisma.machine_pool.updateMany({
         where: { machine_id: machineId },
         data: { deleted: true },
       });
@@ -111,8 +110,16 @@ export class FlyClient {
   /**
    * Returns all non-deleted machines from the database.
    */
-  async listMachines(): Promise<any[]> {
-    return await prisma.machine.findMany({
+  async listMachines(): Promise<{
+    machine_id: string;
+    ipv6: string | null;
+    deleted: boolean;
+    assigned_to: string | null;
+    assigned_at: Date | null;
+    is_available: boolean;
+    created_at: Date;
+  }[]> {
+    return await prisma.machine_pool.findMany({
       where: { deleted: false },
     });
   }
@@ -120,24 +127,39 @@ export class FlyClient {
   /**
    * Returns a single machine by machine_id from the database (if not deleted).
    */
-  async getMachine(machineId: string): Promise<any | null> {
-    return await prisma.machine.findFirst({
+  async getMachine(machineId: string): Promise<{
+    machine_id: string;
+    ipv6: string | null;
+    deleted: boolean;
+    assigned_to: string | null;
+    assigned_at: Date | null;
+    is_available: boolean;
+    created_at: Date;
+  } | null> {
+    return await prisma.machine_pool.findFirst({
       where: { machine_id: machineId, deleted: false },
     });
   }
 
   /**
-   * Returns the ipv6 address for a given machine_id, or null if not found or deleted.
+   * Gets the IP address of a machine.
+   * @param machineId - ID of the machine
+   * @returns The machine's IP address or null if not found
    */
   async getMachineIp(machineId: string): Promise<string | null> {
-    const machine = await prisma.machine.findFirst({
-      where: { machine_id: machineId, deleted: false },
-      select: { ipv6: true }
-    });
-    return machine?.ipv6 ?? null;
+    try {
+      const machine = await prisma.machine_pool.findFirst({
+        where: { machine_id: machineId },
+        select: { ipv6: true }
+      });
+      return machine?.ipv6 || null;
+    } catch (e: unknown) {
+      console.error("Error getting machine IP:", e instanceof Error ? e.message : e);
+      return null;
+    }
   }
 
-  async getImageRef(): Promise<string | undefined> {
+  getImageRef(): string | undefined {
     return this.config.imageRef;
   }
 
@@ -160,13 +182,14 @@ export class FlyClient {
         if (res.status === 404) {
           return null;
         }
-        throw new Error(`HTTP ${res.status} - ${res.statusText}`);
+        console.error(`HTTP ${res.status} - ${res.statusText}`);
+        return null;
       }
 
       return await res.json() as Machine;
     } catch (e: unknown) {
       console.error("Fly API error:", e instanceof Error ? e.message : e);
-      throw e;
+      return null;
     }
   }
 }
