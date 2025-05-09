@@ -285,7 +285,21 @@ export class ContainerServer {
         }
       },
       fetch: corsMiddleware(async (req, server) => {
-        if (
+        console.log('Sec-WebSocket-Protocol: ', req.headers.get("sec-websocket-protocol"));
+
+        if (req.headers.get("sec-websocket-protocol")?.startsWith("vite")) {
+          const url = new URL(req.url);
+          const targetUrl = `ws://localhost:5173${url.pathname}${url.search}`;
+          const headers = Object.fromEntries(req.headers.entries());
+
+          console.log(`Proxying WebSocket to: ${targetUrl}`);
+
+          if (server.upgrade(req, { data: { targetUrl, headers} })) {
+            return;
+          } else {
+            return new Response("Proxy WebSocket upgrade failed", { status: 500 });
+          }
+        } else if (
           server.upgrade(req, {
             data: {
               wsId: Math.random().toString(36).substring(7),
@@ -431,8 +445,12 @@ export class ContainerServer {
             this.activeWs.set(ws.data.wsId, ws);
           } else if (isProxyConnection(ws.data)) {
             const targetUrl = ws.data.targetUrl;
-            const targetSocket = new WebSocket(targetUrl);
+            const targetSocket = new WebSocket(targetUrl, ws.data.headers?.["sec-websocket-protocol"]);
             ws.data.targetSocket = targetSocket;
+
+            targetSocket.onopen = () => {
+              console.log('WebSocket Proxy connection opened');
+            };
 
             targetSocket.onmessage = (ev) => {
               if (typeof ev.data === "string" || ev.data instanceof Uint8Array) {
@@ -440,9 +458,11 @@ export class ContainerServer {
               }
             };
             targetSocket.onclose = () => {
+              console.log('WebSocket Proxy connection closed');
               ws.close();
             };
-            targetSocket.onerror = () => {
+            targetSocket.onerror = (ev) => {
+              console.log('WebSocket Proxy connection error', ev);
               ws.close();
             };
           }
