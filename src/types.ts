@@ -144,6 +144,7 @@ export interface FileSystemWatcher {
 export interface ProxyData {
   targetUrl: string;
   targetSocket?: WebSocket;
+  headers?: Record<string, string>;
 }
 
 export interface DirectConnectionData {
