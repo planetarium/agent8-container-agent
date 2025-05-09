@@ -19,7 +19,7 @@ model machine {
 model machine_pool {
   id         BigInt   @id @default(autoincrement())
   created_at DateTime @default(now())
-  machine_id String?  @unique @db.VarChar
+  machine_id String   @unique @db.VarChar
   deleted    Boolean  @default(false)
   ipv6       String?
   assigned_to String? @db.VarChar

@@ -148,7 +148,7 @@ export class ContainerServer {
     this.flyClientPromise.then(flyClient => {
       this.machinePool = new MachinePool(flyClient, {
         minPoolSize: 2,  // 최소 2개의 머신 유지
-        maxPoolSize: 5,  // 최대 5개의 머신
+        maxPoolSize: 100,  // 최대 5개의 머신
         checkInterval: 60000  // 1분마다 체크
       });
       this.machinePool.start();
