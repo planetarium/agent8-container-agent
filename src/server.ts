@@ -28,6 +28,7 @@ import { FlyClient, initializeFlyClient } from "./fly";
 import type { DirectConnectionData, ProxyData } from "./types.ts";
 import { CandidatePort } from "./portScanner";
 import { AuthManager } from './auth';
+import { MachinePool } from './fly/machinePool';
 
 type WebSocketData = ProxyData | DirectConnectionData;
 
@@ -104,6 +105,7 @@ export class ContainerServer {
   private cleanupInterval: NodeJS.Timeout | null = null;
   private readonly connectionTestInterval = 60000; // 1 minute
   private readonly machineDestroyInterval = 300000; // 5 minutes
+  private machinePool: MachinePool | null = null;
 
   constructor(config: {
     port: number;
@@ -139,6 +141,16 @@ export class ContainerServer {
       apiToken: process.env.FLY_API_TOKEN || '',
       appName: process.env.TARGET_APP_NAME || '',
       imageRef: process.env.FLY_IMAGE_REF || '',
+    });
+
+    // Initialize machine pool
+    this.flyClientPromise.then(flyClient => {
+      this.machinePool = new MachinePool(flyClient, {
+        minPoolSize: 2,  // 최소 2개의 머신 유지
+        maxPoolSize: 100,  // 최대 5개의 머신
+        checkInterval: 60000  // 1분마다 체크
+      });
+      this.machinePool.start();
     });
 
     this.portScanner.start().then(() => {
@@ -198,44 +210,17 @@ export class ContainerServer {
               return Response.json({ error: "Invalid or missing authorization token" }, { status: 401 });
             }
 
-            const flyClient = await this.flyClientPromise;
-            const image = await flyClient.getImageRef();
-            if (!image) {
-              return Response.json({ error: "No image found" }, { status: 500 });
+            if (!this.machinePool) {
+              return Response.json({ error: "Machine pool not initialized" }, { status: 500 });
             }
 
-            const options = {
-              name: generateRandomName(),
-              image,
-              region: "nrt",
-              env: {
-                FLY_PROCESS_GROUP: "worker",
-                PORT: "3000",
-                PRIMARY_REGION: "nrt"
-              },
-              services: [
-                {
-                  protocol: "tcp",
-                  internal_port: 3000,
-                  ports: [
-                    { port: 80, handlers: ["http"] },
-                    { port: 443, handlers: ["tls", "http"] }
-                  ]
-                }
-              ],
-              resources: {
-                cpu_kind: "shared",
-                cpus: 2,
-                memory_mb: 2048
-              },
-              restart: {
-                policy: "on-failure",
-                max_retries: 10
-              }
-            };
+            // Get a machine from the pool instead of creating a new one
+            const machineId = await this.machinePool.getMachine(token);
+            if (!machineId) {
+              return Response.json({ error: "No available machines in the pool" }, { status: 503 });
+            }
 
-            const machine = await flyClient.createMachine(options, token);
-            return Response.json({ machine_id: machine.id });
+            return Response.json({ machine_id: machineId });
           }),
           OPTIONS: corsMiddleware((req: Request) => {
             return new Response(null, { status: 204 });
@@ -259,9 +244,13 @@ export class ContainerServer {
                 return Response.json({ error: "Machine not found" }, { status: 404 });
               }
 
+              // Get machine assignment information
+              const assignment = this.machinePool ? await this.machinePool.getMachineAssignment(machineId) : null;
+
               return Response.json({
                 success: true,
                 machine,
+                assignment
               });
             } catch (error) {
               console.error("Error retrieving machine:", error);
@@ -282,7 +271,7 @@ export class ContainerServer {
               }
             });
           })
-        }
+        },
       },
       fetch: corsMiddleware(async (req, server) => {
         console.log('Sec-WebSocket-Protocol: ', req.headers.get("sec-websocket-protocol"));
@@ -831,6 +820,12 @@ export class ContainerServer {
       clearInterval(this.cleanupInterval);
     }
 
+    if (this.machinePool) {
+      // Release the machine back to the pool instead of destroying it
+      await this.machinePool.releaseMachine(this.machineId);
+      this.machinePool.stop();
+    }
+
     for (const [pid, process] of this.processes.entries()) {
       process.kill();
       this.processes.delete(pid);
@@ -838,11 +833,6 @@ export class ContainerServer {
 
     this.cleanup();
     this.server.stop();
-
-    if (this.flyClientPromise) {
-      const flyClient = await this.flyClientPromise;
-      await flyClient.destroyMachine(this.machineId);
-    }
 
     process.exit(0);
   }
