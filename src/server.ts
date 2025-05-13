@@ -28,6 +28,7 @@ import { FlyClient, initializeFlyClient } from "./fly";
 import type { DirectConnectionData, ProxyData } from "./types.ts";
 import { CandidatePort } from "./portScanner";
 import { AuthManager } from './auth';
+import { setTimeout } from "node:timers/promises";
 
 type WebSocketData = ProxyData | DirectConnectionData;
 
@@ -280,6 +281,21 @@ export class ContainerServer {
                 'Access-Control-Allow-Headers': 'Content-Type, Authorization',
                 'Access-Control-Max-Age': '86400'
               }
+            });
+          })
+        },
+        "/api/health": {
+          GET: corsMiddleware(async (req: Request) => {
+            const host = req.headers.get("host");
+            const querySuccess = await Promise.race([
+              (await this.flyClientPromise).listMachines(),
+              setTimeout(1000),
+            ])
+              .then(() => true)
+              .catch(() => false);
+            return Response.json({
+              success: querySuccess,
+              host,
             });
           })
         }
