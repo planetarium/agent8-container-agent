@@ -1,6 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { Dirent, Stats } from "node:fs";
-import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, rmdir, stat, unlink, writeFile } from "node:fs/promises";
 import { join, normalize } from "node:path";
 import { PortScanner } from "./portScanner/portScanner.ts";
 import process from "node:process";
@@ -144,15 +144,16 @@ export class ContainerServer {
       imageRef: process.env.FLY_IMAGE_REF || '',
     });
 
-    // Initialize machine pool
-    this.flyClientPromise.then(flyClient => {
-      this.machinePool = new MachinePool(flyClient, {
-        minPoolSize: 2,  // 최소 2개의 머신 유지
-        maxPoolSize: 100,  // 최대 5개의 머신
-        checkInterval: 60000  // 1분마다 체크
+    // Initialize machine pool only from pool
+      this.flyClientPromise.then(flyClient => {
+        this.machinePool = new MachinePool(flyClient, {
+          defaultPoolSize: 3,  // 최대 3개의 머신
+          checkInterval: 60000  // 1분마다 체크
+        });
+        if (process.env.TARGET_APP_NAME !== process.env.FLY_APP_NAME) {
+          this.machinePool.start();
+        }
       });
-      this.machinePool.start();
-    });
 
     this.portScanner.start().then(() => {
       console.log('스캐너가 시작되었습니다.');
@@ -798,7 +799,7 @@ export class ContainerServer {
       && this.machineLastActivityTime
       && now - this.machineLastActivityTime > this.machineDestroyInterval
     ) {
-      console.info("No active connections, stopping server");
+      console.info("No active connections, releasing server");
       this.stop();
     }
   }
@@ -839,7 +840,6 @@ export class ContainerServer {
     if (this.machinePool) {
       // Release the machine back to the pool instead of destroying it
       await this.machinePool.releaseMachine(this.machineId);
-      this.machinePool.stop();
     }
 
     for (const [pid, process] of this.processes.entries()) {
@@ -848,9 +848,8 @@ export class ContainerServer {
     }
 
     this.cleanup();
-    this.server.stop();
 
-    process.exit(0);
+    await clearDirectory('/home/project');
   }
 
   private spawnProcess(
@@ -1151,6 +1150,23 @@ async function mount(mountPath: string, tree: FileSystemTree) {
       await writeFile(fullPath, item.file.contents);
     } else if ("directory" in item) {
       await mount(fullPath, item.directory);
+    }
+  }
+}
+
+async function clearDirectory(dirPath: string): Promise<void> {
+  const entries: Dirent[] = await readdir(dirPath, { withFileTypes: true });
+  
+  for (const entry of entries) {
+    const fullPath: string = join(dirPath, entry.name);
+    
+    if (entry.isDirectory()) {
+      // 재귀적으로 하위 디렉토리 내용 삭제 후 디렉토리 삭제
+      await clearDirectory(fullPath);
+      await rmdir(fullPath);
+    } else {
+      // 파일 삭제
+      await unlink(fullPath);
     }
   }
 }
