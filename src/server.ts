@@ -147,7 +147,7 @@ export class ContainerServer {
     // Initialize machine pool only from pool
       this.flyClientPromise.then(flyClient => {
         this.machinePool = new MachinePool(flyClient, {
-          defaultPoolSize: 3,  // 최대 3개의 머신
+          defaultPoolSize: 10,  // 최대 3개의 머신
           checkInterval: 60000  // 1분마다 체크
         });
         if (process.env.TARGET_APP_NAME !== process.env.FLY_APP_NAME) {
