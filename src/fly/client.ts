@@ -192,4 +192,26 @@ export class FlyClient {
       return null;
     }
   }
+
+  /**
+   * Returns the list of actual machines from the Fly API (not the DB).
+   */
+  async listFlyMachines(): Promise<any[]> {
+    try {
+      const res = await fetch(`${this.config.baseUrl}/apps/${this.config.appName}/machines`, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${this.config.apiToken}`,
+          Accept: "application/json",
+        },
+      });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status} - ${res.statusText}`);
+      }
+      return await res.json();
+    } catch (e: unknown) {
+      console.error("Fly API error (listFlyMachines):", e instanceof Error ? e.message : e);
+      return [];
+    }
+  }
 }

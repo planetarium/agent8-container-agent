@@ -14,22 +14,19 @@ interface Machine {
 
 export class MachinePool {
   private readonly flyClient: FlyClient;
-  private readonly minPoolSize: number;
-  private readonly maxPoolSize: number;
+  private readonly defaultPoolSize: number;
   private readonly checkInterval: number;
   private checkTimer: NodeJS.Timeout | null = null;
 
   constructor(
     flyClient: FlyClient,
     options: {
-      minPoolSize: number;
-      maxPoolSize: number;
+      defaultPoolSize: number;
       checkInterval?: number; // in milliseconds
     }
   ) {
     this.flyClient = flyClient;
-    this.minPoolSize = options.minPoolSize;
-    this.maxPoolSize = options.maxPoolSize;
+    this.defaultPoolSize = options.defaultPoolSize;
     this.checkInterval = options.checkInterval || 60000; // default 1 minute
   }
 
@@ -59,39 +56,55 @@ export class MachinePool {
    */
   private async checkPool(): Promise<void> {
     try {
-      // Get current pool status
-      const machines = await prisma.machine_pool.findMany({
-        where: { deleted: false }
-      });
+      // 1. 실제 머신 상태 조회 (Fly API)
+      const flyMachines = await this.flyClient.listFlyMachines();
+      const flyMachineIds = new Set(flyMachines.map((m: any) => m.id));
 
-      const availableMachines = machines.filter((m: Machine) => m.is_available);
-      const totalMachines = machines.length;
+      // 2. DB 상태 조회
+      const dbMachines = await prisma.machine_pool.findMany({ where: { deleted: false } });
+      const dbMachineIds = new Set(dbMachines.map((m: any) => m.machine_id));
 
-      console.log(`Pool status: ${availableMachines.length} available, ${totalMachines} total`);
-
-      // Create new machines if needed
-      if (availableMachines.length < this.minPoolSize && totalMachines < this.maxPoolSize) {
-        const machinesToCreate = Math.min(
-          this.minPoolSize - availableMachines.length,
-          this.maxPoolSize - totalMachines
-        );
-
-        console.log(`Creating ${machinesToCreate} new machines`);
-        for (let i = 0; i < machinesToCreate; i++) {
-          await this.createNewMachine();
+      // 3. DB에는 있는데 실제로 없는 머신 → soft delete
+      for (const dbMachine of dbMachines) {
+        if (!flyMachineIds.has(dbMachine.machine_id)) {
+          await prisma.machine_pool.updateMany({
+            where: { machine_id: dbMachine.machine_id },
+            data: { deleted: true }
+          });
         }
       }
 
-      // Remove excess machines if needed
-      if (availableMachines.length > this.minPoolSize) {
-        const machinesToRemove = availableMachines.length - this.minPoolSize;
-        console.log(`Removing ${machinesToRemove} excess machines`);
-        
-        for (let i = 0; i < machinesToRemove; i++) {
-          const machine = availableMachines[i];
-          if (machine.machine_id) {
-            await this.flyClient.destroyMachine(machine.machine_id);
-          }
+      // 4. 실제로는 있는데 DB에 없는 머신 → DB에 추가
+      for (const flyMachine of flyMachines) {
+        if (!dbMachineIds.has(flyMachine.id)) {
+          await prisma.machine_pool.create({
+            data: {
+              machine_id: flyMachine.id,
+              ipv6: flyMachine.private_ip || '',
+              deleted: false,
+              is_available: true,
+              created_at: new Date(flyMachine.created_at || Date.now()),
+            }
+          });
+        }
+      }
+
+      // 5. 정상 머신만 카운트해서 풀 사이즈 유지
+      const healthyMachines = flyMachines.filter((m: any) => m.state === 'started');
+      if (healthyMachines.length < this.defaultPoolSize) {
+        const toCreate = this.defaultPoolSize - healthyMachines.length;
+        for (let i = 0; i < toCreate; i++) {
+          await this.createNewMachine();
+        }
+      } else if (healthyMachines.length > this.defaultPoolSize) {
+        const toDelete = healthyMachines.length - this.defaultPoolSize;
+        for (let i = 0; i < toDelete; i++) {
+          const machine = healthyMachines[i];
+          await this.flyClient.destroyMachine(machine.id);
+          await prisma.machine_pool.updateMany({
+            where: { machine_id: machine.id },
+            data: { deleted: true }
+          });
         }
       }
     } catch (error) {
