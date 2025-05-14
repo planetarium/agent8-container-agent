@@ -302,7 +302,14 @@ export class ContainerServer {
       fetch: corsMiddleware(async (req, server) => {
         console.log('Sec-WebSocket-Protocol: ', req.headers.get("sec-websocket-protocol"));
 
-        if (req.headers.get("sec-websocket-protocol")?.startsWith("vite")) {
+        if (req.headers.get("sec-websocket-protocol")?.startsWith("agent8-container")) {
+          server.upgrade(req, {
+            data: {
+              wsId: Math.random().toString(36).substring(7),
+            },
+          })
+        } else {
+          // Proxy WebSocket requests to localhost
           const url = new URL(req.url);
           if (this.config.localProxyPort === null) {
             return new Response("Proxy is disabled", { status: 404 });
@@ -317,140 +324,132 @@ export class ContainerServer {
           } else {
             return new Response("Proxy WebSocket upgrade failed", { status: 500 });
           }
-        } else if (
-          server.upgrade(req, {
-            data: {
-              wsId: Math.random().toString(36).substring(7),
-            },
-          })
-        ) {
-          return;
         }
 
-       // Proxy HTTP requests to localhost:5173 when WebSocket upgrade fails
-      try {
-        if (this.config.localProxyPort === null) {
-          return new Response("Proxy is disabled", { status: 404 });
-        }
-
-        const url = new URL(req.url);
-        const targetUrl = `http://localhost:${this.config.localProxyPort}${url.pathname}${url.search}`;
-
-        console.log(`Proxying request to: ${targetUrl}`);
-
-        const proxyResponse = await fetch(targetUrl, {
-          method: req.method,
-          headers: req.headers,
-          body: req.body,
-        });
-
-        // Add CORS headers to the response
-        const headers = new Headers(proxyResponse.headers);
-        headers.set('Access-Control-Allow-Origin', '*');
-        headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-        headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-
-        // Allow embedding in iframes
-        headers.set('X-Frame-Options', 'ALLOWALL');
-        headers.set('Content-Security-Policy', "frame-ancestors *");
-        headers.set('Cross-Origin-Resource-Policy', 'cross-origin');
-        headers.set('Cross-Origin-Embedder-Policy', 'require-corp');
-
-        // Inject error capture script for HTML content
-        const contentType = proxyResponse.headers.get('content-type');
-        if (contentType && contentType.includes('text/html')) {
-          // Get response body as text
-          const originalHtml = await proxyResponse.text();
-
-          // Error capture script
-          const errorCaptureScript = `
-          <script>
-            window.onerror = function(message, source, lineno, colno, error) {
-              window.parent.postMessage({
-                type: 'iframe-error',
-                error: {
-                  type: 'uncaught-exception',
-                  message: message,
-                  source: source,
-                  lineno: lineno,
-                  colno: colno,
-                  stack: error?.stack,
-                  pathname: window.location.pathname,
-                  search: window.location.search,
-                  hash: window.location.hash,
-                  port: ${url.port || 80}
-                }
-              }, '*');
-              return false;
-            };
-
-            window.onunhandledrejection = function(event) {
-              window.parent.postMessage({
-                type: 'iframe-error',
-                error: {
-                  type: 'unhandled-rejection',
-                  message: event.reason?.message || 'Unhandled Promise Rejection',
-                  stack: event.reason?.stack,
-                  pathname: window.location.pathname,
-                  search: window.location.search,
-                  hash: window.location.hash,
-                  port: ${url.port || 80}
-                }
-              }, '*');
-            };
-
-            // console.error 캡처 (선택사항)
-            const originalConsoleError = console.error;
-            console.error = function() {
-              originalConsoleError.apply(console, arguments);
-              const args = Array.from(arguments);
-              window.parent.postMessage({
-                type: 'iframe-error',
-                error: {
-                  type: 'console-error',
-                  message: args.map(arg => String(arg)).join(' '),
-                  stack: new Error().stack,
-                  pathname: window.location.pathname,
-                  search: window.location.search,
-                  hash: window.location.hash,
-                  port: ${url.port || 80}
-                }
-              }, '*');
-            };
-          </script>`;
-
-          // Insert script before </head> tag
-          let modifiedHtml = originalHtml;
-          if (originalHtml.includes('</head>')) {
-            modifiedHtml = originalHtml.replace('</head>', `${errorCaptureScript}</head>`);
-          } else {
-            // If head tag is not present, add script to start of body
-            modifiedHtml = originalHtml.replace('<body>', `<body>${errorCaptureScript}`);
-
-            // If body tag is not present, add script to start of HTML
-            if (!originalHtml.includes('<body>')) {
-              modifiedHtml = `${errorCaptureScript}${originalHtml}`;
-            }
+        // Proxy HTTP requests to localhost:5173 when WebSocket upgrade fails
+        try {
+          if (this.config.localProxyPort === null) {
+            return new Response("Proxy is disabled", { status: 404 });
           }
 
-          // Create new response with modified HTML
-          return new Response(modifiedHtml, {
+          const url = new URL(req.url);
+          const targetUrl = `http://localhost:${this.config.localProxyPort}${url.pathname}${url.search}`;
+
+          console.log(`Proxying request to: ${targetUrl}`);
+
+          const proxyResponse = await fetch(targetUrl, {
+            method: req.method,
+            headers: req.headers,
+            body: req.body,
+          });
+
+          // Add CORS headers to the response
+          const headers = new Headers(proxyResponse.headers);
+          headers.set('Access-Control-Allow-Origin', '*');
+          headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+          headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+          // Allow embedding in iframes
+          headers.set('X-Frame-Options', 'ALLOWALL');
+          headers.set('Content-Security-Policy', "frame-ancestors *");
+          headers.set('Cross-Origin-Resource-Policy', 'cross-origin');
+          headers.set('Cross-Origin-Embedder-Policy', 'require-corp');
+
+          // Inject error capture script for HTML content
+          const contentType = proxyResponse.headers.get('content-type');
+          if (contentType && contentType.includes('text/html')) {
+            // Get response body as text
+            const originalHtml = await proxyResponse.text();
+
+            // Error capture script
+            const errorCaptureScript = `
+            <script>
+              window.onerror = function(message, source, lineno, colno, error) {
+                window.parent.postMessage({
+                  type: 'iframe-error',
+                  error: {
+                    type: 'uncaught-exception',
+                    message: message,
+                    source: source,
+                    lineno: lineno,
+                    colno: colno,
+                    stack: error?.stack,
+                    pathname: window.location.pathname,
+                    search: window.location.search,
+                    hash: window.location.hash,
+                    port: ${url.port || 80}
+                  }
+                }, '*');
+                return false;
+              };
+
+              window.onunhandledrejection = function(event) {
+                window.parent.postMessage({
+                  type: 'iframe-error',
+                  error: {
+                    type: 'unhandled-rejection',
+                    message: event.reason?.message || 'Unhandled Promise Rejection',
+                    stack: event.reason?.stack,
+                    pathname: window.location.pathname,
+                    search: window.location.search,
+                    hash: window.location.hash,
+                    port: ${url.port || 80}
+                  }
+                }, '*');
+              };
+
+              // console.error 캡처 (선택사항)
+              const originalConsoleError = console.error;
+              console.error = function() {
+                originalConsoleError.apply(console, arguments);
+                const args = Array.from(arguments);
+                window.parent.postMessage({
+                  type: 'iframe-error',
+                  error: {
+                    type: 'console-error',
+                    message: args.map(arg => String(arg)).join(' '),
+                    stack: new Error().stack,
+                    pathname: window.location.pathname,
+                    search: window.location.search,
+                    hash: window.location.hash,
+                    port: ${url.port || 80}
+                  }
+                }, '*');
+              };
+            </script>`;
+
+            // Insert script before </head> tag
+            let modifiedHtml = originalHtml;
+            if (originalHtml.includes('</head>')) {
+              modifiedHtml = originalHtml.replace('</head>', `${errorCaptureScript}</head>`);
+            } else {
+              // If head tag is not present, add script to start of body
+              modifiedHtml = originalHtml.replace('<body>', `<body>${errorCaptureScript}`);
+
+              // If body tag is not present, add script to start of HTML
+              if (!originalHtml.includes('<body>')) {
+                modifiedHtml = `${errorCaptureScript}${originalHtml}`;
+              }
+            }
+
+            // Create new response with modified HTML
+            return new Response(modifiedHtml, {
+              status: proxyResponse.status,
+              statusText: proxyResponse.statusText,
+              headers: headers
+            });
+          }
+
+          // If not HTML, return original response as is
+          return new Response(proxyResponse.body, {
             status: proxyResponse.status,
             statusText: proxyResponse.statusText,
             headers: headers
           });
+        } catch (error) {
+          console.error("Proxy error:", error);
+          return new Response("Proxy error occurred", { status: 500 });
         }
-
-        // If not HTML, return original response as is
-        return new Response(proxyResponse.body, {
-          status: proxyResponse.status,
-          statusText: proxyResponse.statusText,
-          headers: headers
-        });
-      } catch (error) {
-        console.error("Proxy error:", error);
-        return new Response("Proxy error occurred", { status: 500 });
-      }
       }),
       websocket: {
         message: (ws: ServerWebSocket<WebSocketData>, message) => {
