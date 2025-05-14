@@ -1,0 +1,5 @@
+packages:
+  # Include all packages in direct subdirectories of the root
+  - '*'
+  # Exclude node_modules directories
+  - '!**/node_modules/**'

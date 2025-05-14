@@ -20,6 +20,7 @@ RUN apt-get update && apt-get install -y \
     make \
     g++ \
     build-essential \
+    git \
     && apt-get clean
 
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
@@ -49,6 +50,17 @@ ENV PORT=3000 \
     COEP=credentialless \
     FORWARD_PREVIEW_ERRORS=true \
     NODE_ENV=development
+
+# Cache dependencies for all templates
+RUN git clone --filter=blob:none --sparse https://github.com/planetarium/agent8-templates ./agent8-templates && \
+    cd agent8-templates && \
+    git sparse-checkout init --no-cone && \
+    git sparse-checkout set */package.json
+
+WORKDIR /app/agent8-templates
+COPY pnpm-workspace.yaml ./pnpm-workspace.yaml
+ENV PNPM_HOME=/pnpm
+RUN pnpm install --prod
 
 WORKDIR /home/project
 
