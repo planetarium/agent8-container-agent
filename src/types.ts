@@ -11,6 +11,8 @@ import type {
 
 export type { BufferEncoding } from "../protocol/src/index.ts";
 
+
+
 // Event listener types
 export type Unsubscribe = () => void;
 export type PortListener = (port: number) => void;

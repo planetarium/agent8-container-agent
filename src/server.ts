@@ -31,6 +31,19 @@ import { AuthManager } from './auth';
 import { setTimeout } from "node:timers/promises";
 import { MachinePool } from './fly/machinePool';
 
+// Server configuration interface
+export interface ContainerServerConfig {
+  port: number;
+  workdirName: string;
+  coep: string;
+  forwardPreviewErrors: boolean;
+  routerDomain: string;
+  appName: string;
+  machineId: string;
+  processGroup: string;
+  localProxyPort: number | null;
+}
+
 type WebSocketData = ProxyData | DirectConnectionData;
 
 // Type guards
@@ -85,16 +98,7 @@ export class ContainerServer {
   private readonly activeWs: Map<string, ServerWebSocket<WebSocketData>>;
   private readonly portScanner: PortScanner;
   private readonly processClients: Map<number, Set<ServerWebSocket<unknown>>>;
-  private readonly config: {
-    port: number;
-    workdirName: string;
-    coep: string;
-    forwardPreviewErrors: boolean;
-    routerDomain: string;
-    appName: string;
-    machineId: string;
-    processGroup: string;
-  };
+  private readonly config: ContainerServerConfig;
   private authToken: string | undefined;
   private routerDomain: string;
   private appName: string;
@@ -108,16 +112,7 @@ export class ContainerServer {
   private readonly machineDestroyInterval = 300000; // 5 minutes
   private machinePool: MachinePool | null = null;
 
-  constructor(config: {
-    port: number;
-    workdirName: string;
-    coep: string;
-    forwardPreviewErrors: boolean;
-    routerDomain: string;
-    appName: string;
-    machineId: string;
-    processGroup: string;
-  }) {
+  constructor(config: ContainerServerConfig) {
     this.config = config;
     this.processes = new Map();
     this.fileSystemWatchers = new Map();
@@ -204,9 +199,13 @@ export class ContainerServer {
       routes: {
         "/api/machine": {
           POST: corsMiddleware(async (req: Request) => {
-            const token = this.authManager.extractTokenFromHeader(req.headers.get("authorization"));
+            const authHeader = req.headers.get("authorization");
+            const token = this.authManager.extractTokenFromHeader(authHeader);
+            if (!token) {
+              return Response.json({ error: "Invalid or missing authorization token" }, { status: 401 });
+            }
             const userInfo = await this.authManager.verifyToken(token);
-            if (!token || !userInfo) {
+            if (!userInfo) {
               return Response.json({ error: "Invalid or missing authorization token" }, { status: 401 });
             }
 
@@ -235,9 +234,13 @@ export class ContainerServer {
         },
         "/api/machine/:id": {
           GET: corsMiddleware(async (req: Request) => {
-            const token = this.authManager.extractTokenFromHeader(req.headers.get("authorization"));
+            const authHeader = req.headers.get("authorization");
+            const token = this.authManager.extractTokenFromHeader(authHeader);
+            if (!token) {
+              return Response.json({ error: "Invalid or missing authorization token" }, { status: 401 });
+            }
             const userInfo = await this.authManager.verifyToken(token);
-            if (!token || !userInfo) {
+            if (!userInfo) {
               return Response.json({ error: "Invalid or missing authorization token" }, { status: 401 });
             }
 
@@ -284,7 +287,7 @@ export class ContainerServer {
           GET: corsMiddleware(async (req: Request) => {
             const host = req.headers.get("host");
             const querySuccess = await Promise.race([
-              (await this.flyClientPromise).listMachines(),
+              (await this.flyClientPromise).listFlyMachines(),
               setTimeout(1000),
             ])
               .then(() => true)
@@ -301,7 +304,10 @@ export class ContainerServer {
 
         if (req.headers.get("sec-websocket-protocol")?.startsWith("vite")) {
           const url = new URL(req.url);
-          const targetUrl = `ws://localhost:5173${url.pathname}${url.search}`;
+          if (this.config.localProxyPort === null) {
+            return new Response("Proxy is disabled", { status: 404 });
+          }
+          const targetUrl = `ws://localhost:${this.config.localProxyPort}${url.pathname}${url.search}`;
           const headers = Object.fromEntries(req.headers.entries());
 
           console.log(`Proxying WebSocket to: ${targetUrl}`);
@@ -323,8 +329,12 @@ export class ContainerServer {
 
        // Proxy HTTP requests to localhost:5173 when WebSocket upgrade fails
       try {
+        if (this.config.localProxyPort === null) {
+          return new Response("Proxy is disabled", { status: 404 });
+        }
+
         const url = new URL(req.url);
-        const targetUrl = `http://localhost:5173${url.pathname}${url.search}`;
+        const targetUrl = `http://localhost:${this.config.localProxyPort}${url.pathname}${url.search}`;
 
         console.log(`Proxying request to: ${targetUrl}`);
 
@@ -1181,10 +1191,10 @@ async function mount(mountPath: string, tree: FileSystemTree) {
 
 async function clearDirectory(dirPath: string): Promise<void> {
   const entries: Dirent[] = await readdir(dirPath, { withFileTypes: true });
-  
+
   for (const entry of entries) {
     const fullPath: string = join(dirPath, entry.name);
-    
+
     if (entry.isDirectory()) {
       // 재귀적으로 하위 디렉토리 내용 삭제 후 디렉토리 삭제
       await clearDirectory(fullPath);

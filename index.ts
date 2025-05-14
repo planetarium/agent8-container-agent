@@ -1,14 +1,13 @@
 import process from "node:process";
-import { ContainerServer } from "@/server";
 import dotenv from "dotenv";
 import { MachinePool } from "./src/fly/machinePool";
 import { FlyClient } from "./src/fly";
-
+import { ContainerServer, ContainerServerConfig } from "./src/server";
 // Load environment variables from .env file
 dotenv.config();
 
 function main() {
-  const config = {
+  const config: ContainerServerConfig = {
     port: Number.parseInt(process.env.PORT || "3000", 10),
     workdirName: process.env.WORKDIR_NAME || "/workspace",
     coep: process.env.COEP || "credentialless",
@@ -17,6 +16,7 @@ function main() {
     appName: process.env.FLY_APP_NAME || "",
     machineId: process.env.FLY_MACHINE_ID || "",
     processGroup: process.env.FLY_PROCESS_GROUP || "app",
+    localProxyPort: process.env.LOCAL_PROXY_PORT ? Number.parseInt(process.env.LOCAL_PROXY_PORT, 10) : null,
   };
 
   console.info("container agent started with " + config.processGroup + " mode");
