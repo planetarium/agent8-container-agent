@@ -11,6 +11,18 @@ import type {
 
 export type { BufferEncoding } from "../protocol/src/index.ts";
 
+// Server configuration interface
+export interface ContainerServerConfig {
+  port: number;
+  workdirName: string;
+  coep: string;
+  forwardPreviewErrors: boolean;
+  routerDomain: string;
+  appName: string;
+  machineId: string;
+  processGroup: string;
+}
+
 // Event listener types
 export type Unsubscribe = () => void;
 export type PortListener = (port: number) => void;

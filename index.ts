@@ -1,12 +1,13 @@
 import process from "node:process";
 import { ContainerServer } from "@/server";
 import dotenv from "dotenv";
+import { ContainerServerConfig } from "@/types";
 
 // Load environment variables from .env file
 dotenv.config();
 
 function main() {
-  const config = {
+  const config: ContainerServerConfig = {
     port: Number.parseInt(process.env.PORT || "3000", 10),
     workdirName: process.env.WORKDIR_NAME || "/workspace",
     coep: process.env.COEP || "credentialless",

@@ -25,7 +25,7 @@ import type {
   WatchResponse,
 } from "../protocol/src/index.ts";
 import { FlyClient, initializeFlyClient } from "./fly";
-import type { DirectConnectionData, ProxyData } from "./types.ts";
+import type { DirectConnectionData, ProxyData, ContainerServerConfig } from "./types.ts";
 import { CandidatePort } from "./portScanner";
 import { AuthManager } from './auth';
 import { setTimeout } from "node:timers/promises";
@@ -84,16 +84,7 @@ export class ContainerServer {
   private readonly activeWs: Map<string, ServerWebSocket<WebSocketData>>;
   private readonly portScanner: PortScanner;
   private readonly processClients: Map<number, Set<ServerWebSocket<unknown>>>;
-  private readonly config: {
-    port: number;
-    workdirName: string;
-    coep: string;
-    forwardPreviewErrors: boolean;
-    routerDomain: string;
-    appName: string;
-    machineId: string;
-    processGroup: string;
-  };
+  private readonly config: ContainerServerConfig;
   private authToken: string | undefined;
   private routerDomain: string;
   private appName: string;
@@ -106,16 +97,7 @@ export class ContainerServer {
   private readonly connectionTestInterval = 60000; // 1 minute
   private readonly machineDestroyInterval = 300000; // 5 minutes
 
-  constructor(config: {
-    port: number;
-    workdirName: string;
-    coep: string;
-    forwardPreviewErrors: boolean;
-    routerDomain: string;
-    appName: string;
-    machineId: string;
-    processGroup: string;
-  }) {
+  constructor(config: ContainerServerConfig) {
     this.config = config;
     this.processes = new Map();
     this.fileSystemWatchers = new Map();
