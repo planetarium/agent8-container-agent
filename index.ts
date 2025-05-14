@@ -16,6 +16,7 @@ function main() {
     appName: process.env.FLY_APP_NAME || "",
     machineId: process.env.FLY_MACHINE_ID || "",
     processGroup: process.env.FLY_PROCESS_GROUP || "app",
+    localProxyPort: process.env.LOCAL_PROXY_PORT ? Number.parseInt(process.env.LOCAL_PROXY_PORT, 10) : null,
   };
 
   const server = new ContainerServer(config);

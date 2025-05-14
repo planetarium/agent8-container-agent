@@ -287,7 +287,10 @@ export class ContainerServer {
 
         if (req.headers.get("sec-websocket-protocol")?.startsWith("vite")) {
           const url = new URL(req.url);
-          const targetUrl = `ws://localhost:5173${url.pathname}${url.search}`;
+          if (this.config.localProxyPort === null) {
+            return new Response("Proxy is disabled", { status: 404 });
+          }
+          const targetUrl = `ws://localhost:${this.config.localProxyPort}${url.pathname}${url.search}`;
           const headers = Object.fromEntries(req.headers.entries());
 
           console.log(`Proxying WebSocket to: ${targetUrl}`);
@@ -309,8 +312,12 @@ export class ContainerServer {
 
        // Proxy HTTP requests to localhost:5173 when WebSocket upgrade fails
       try {
+        if (this.config.localProxyPort === null) {
+          return new Response("Proxy is disabled", { status: 404 });
+        }
+
         const url = new URL(req.url);
-        const targetUrl = `http://localhost:5173${url.pathname}${url.search}`;
+        const targetUrl = `http://localhost:${this.config.localProxyPort}${url.pathname}${url.search}`;
 
         console.log(`Proxying request to: ${targetUrl}`);
 

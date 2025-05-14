@@ -21,6 +21,7 @@ export interface ContainerServerConfig {
   appName: string;
   machineId: string;
   processGroup: string;
+  localProxyPort: number | null;
 }
 
 // Event listener types
