@@ -20,6 +20,7 @@ RUN apt-get update && apt-get install -y \
     make \
     g++ \
     build-essential \
+    git \
     && apt-get clean
 
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
@@ -50,8 +51,35 @@ ENV PORT=3000 \
     FORWARD_PREVIEW_ERRORS=true \
     NODE_ENV=development
 
+RUN git clone --filter=blob:none --sparse https://github.com/planetarium/agent8-templates ./agent8-templates && \
+    cd agent8-templates && \
+    git sparse-checkout init --no-cone && \
+    git sparse-checkout set */package.json
+
+WORKDIR /app/agent8-templates
+COPY pnpm-workspace.yaml ./pnpm-workspace.yaml
+RUN mkdir -p /pnpm-temp/store /pnpm/store
+ENV PNPM_HOME=/pnpm-temp \
+    PNPM_STORE_DIR=/pnpm-temp/store
+RUN pnpm install --prod
+
+RUN echo '#!/bin/sh\n\
+if [ -d "/pnpm-temp/store" ] && [ "$(ls -A /pnpm-temp/store)" ]; then\n\
+  echo "Copying pnpm cache from shared read-only volume..."\n\
+  mkdir -p /pnpm/store\n\
+  cp -r /pnpm-temp/store/* /pnpm/store/\n\
+  echo "PNPM cache successfully copied to internal store"\n\
+  rm -rf /pnpm-temp\n\
+  echo "PNPM cache cleanup completed"\n\
+fi\n\
+exec "$@"' > /app/copy-pnpm-store.sh && chmod +x /app/copy-pnpm-store.sh
+
+ENV PNPM_HOME=/pnpm \
+    PNPM_STORE_DIR=/pnpm/store
+
 WORKDIR /home/project
 
 EXPOSE 3000
 
-ENTRYPOINT ["bun", "/app/dist/index.js"]
+# Use the init script as entrypoint that will setup pnpm store and then run the original entrypoint
+ENTRYPOINT ["/app/copy-pnpm-store.sh", "bun", "/app/dist/index.js"]
