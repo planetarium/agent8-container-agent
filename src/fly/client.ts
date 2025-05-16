@@ -1,7 +1,4 @@
 import { FlyConfig, Machine, CreateMachineOptions } from './types';
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
 
 export class FlyClient {
   private config: FlyConfig;
@@ -26,7 +23,7 @@ export class FlyClient {
   }
 
   /**
-   * Creates a Fly machine and records it in the database.
+   * Creates a Fly machine
    * @param options - Machine creation options
    */
   async createMachine(options: CreateMachineOptions, retry: number = 0): Promise<Machine> {
@@ -60,19 +57,7 @@ export class FlyClient {
         throw new Error(`HTTP ${res.status} - ${res.statusText}`);
       }
 
-      const machine: Machine = await res.json();
-
-      // Extract relevant fields for DB
-      const dbRecord = {
-        machine_id: machine.id,
-        ipv6: machine.private_ip || '',
-        deleted: false,
-        is_available: true,
-        created_at: new Date(machine.created_at || Date.now()),
-      };
-      await prisma.machine_pool.create({ data: dbRecord });
-
-      return machine;
+      return await res.json();
     } catch (e: unknown) {
       console.error("Fly API error:", e instanceof Error ? e.message : e);
       throw e;
@@ -80,19 +65,9 @@ export class FlyClient {
   }
 
   /**
-   * Destroys a machine by deleting it from the database and the Fly API.
+   * Destroys a machine from the Fly API.
    */
   async destroyMachine(machineId: string): Promise<void> {
-    try {
-      await prisma.machine_pool.updateMany({
-        where: { machine_id: machineId },
-        data: { deleted: true },
-      });
-    } catch (e: unknown) {
-      console.error("DB error (soft delete):", e instanceof Error ? e.message : e);
-      throw e;
-    }
-
     const res = await fetch(`${this.config.baseUrl}/apps/${this.config.appName}/machines/${machineId}?force=true`, {
       method: "DELETE",
       headers: {
@@ -104,58 +79,6 @@ export class FlyClient {
 
     if (!res.ok) {
       throw new Error(`HTTP ${res.status} - ${res.statusText}`);
-    }
-  }
-
-  /**
-   * Returns all non-deleted machines from the database.
-   */
-  async listMachines(): Promise<{
-    machine_id: string;
-    ipv6: string | null;
-    deleted: boolean;
-    assigned_to: string | null;
-    assigned_at: Date | null;
-    is_available: boolean;
-    created_at: Date;
-  }[]> {
-    return await prisma.machine_pool.findMany({
-      where: { deleted: false },
-    });
-  }
-
-  /**
-   * Returns a single machine by machine_id from the database (if not deleted).
-   */
-  async getMachine(machineId: string): Promise<{
-    machine_id: string;
-    ipv6: string | null;
-    deleted: boolean;
-    assigned_to: string | null;
-    assigned_at: Date | null;
-    is_available: boolean;
-    created_at: Date;
-  } | null> {
-    return await prisma.machine_pool.findFirst({
-      where: { machine_id: machineId, deleted: false },
-    });
-  }
-
-  /**
-   * Gets the IP address of a machine.
-   * @param machineId - ID of the machine
-   * @returns The machine's IP address or null if not found
-   */
-  async getMachineIp(machineId: string): Promise<string | null> {
-    try {
-      const machine = await prisma.machine_pool.findFirst({
-        where: { machine_id: machineId },
-        select: { ipv6: true }
-      });
-      return machine?.ipv6 || null;
-    } catch (e: unknown) {
-      console.error("Error getting machine IP:", e instanceof Error ? e.message : e);
-      return null;
     }
   }
 
@@ -194,7 +117,7 @@ export class FlyClient {
   }
 
   /**
-   * Returns the list of actual machines from the Fly API (not the DB).
+   * Returns the list of actual machines from the Fly API.
    */
   async listFlyMachines(): Promise<any[]> {
     try {
