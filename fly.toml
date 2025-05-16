@@ -3,7 +3,7 @@
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = 'agent8-controller'
+app = 'agent8-container-pool'
 primary_region = 'nrt'
 
 [build]
@@ -15,6 +15,7 @@ primary_region = 'nrt'
 [[services]]
   protocol = 'tcp'
   internal_port = 3000
+  processes = ["app"]
 
   [[services.ports]]
     port = 80
@@ -32,3 +33,7 @@ primary_region = 'nrt'
   memory = '1gb'
   cpu_kind = 'shared'
   cpus = 1
+
+[processes]
+  app = ""
+  scheduler = ""
