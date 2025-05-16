@@ -145,15 +145,12 @@ export class ContainerServer {
     });
 
     // Initialize machine pool only from pool
-      this.flyClientPromise.then(flyClient => {
-        this.machinePool = new MachinePool(flyClient, {
-          defaultPoolSize: 10,  // 최대 3개의 머신
-          checkInterval: 60000  // 1분마다 체크
-        });
-        if (process.env.TARGET_APP_NAME !== process.env.FLY_APP_NAME) {
-          this.machinePool.start();
-        }
+    this.flyClientPromise.then(flyClient => {
+      this.machinePool = new MachinePool(flyClient, {
+        defaultPoolSize: 10,  // 최대 3개의 머신
+        checkInterval: 60000  // 1분마다 체크
       });
+    });
 
     this.portScanner.start().then(() => {
       console.log('스캐너가 시작되었습니다.');
@@ -833,10 +830,6 @@ export class ContainerServer {
   }
 
   public async stop(): Promise<void> {
-    if (this.cleanupInterval) {
-      clearInterval(this.cleanupInterval);
-    }
-
     if (this.machinePool) {
       // Release the machine back to the pool instead of destroying it
       await this.machinePool.releaseMachine(this.machineId);
