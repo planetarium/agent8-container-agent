@@ -27,10 +27,11 @@ RUN git clone --filter=blob:none --sparse https://github.com/planetarium/agent8-
     git sparse-checkout set */package.json
 
 WORKDIR /app/agent8-templates
-COPY pnpm-workspace.yaml ./pnpm-workspace.yaml
+COPY merge-dependencies.js ./merge-dependencies.js
+RUN node merge-dependencies.js
 
-ENV PNPM_HOME=/app/pnpm \
-    PNPM_STORE_DIR=/app/pnpm/store
+ENV PNPM_HOME=/pnpm \
+    PNPM_STORE_DIR=/pnpm/store
 
 RUN pnpm install
 
@@ -62,7 +63,7 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/package.json ./
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/preview.ts ./preview.ts
-COPY --from=template-builder /app/pnpm ./pnpm
+COPY --from=template-builder /pnpm /pnpm
 
 # Copy and build pty-wrapper
 COPY pty-wrapper /app/pty-wrapper
@@ -79,11 +80,13 @@ ENV PORT=3000 \
     PNPM_HOME=/pnpm \
     PNPM_STORE_DIR=/pnpm/store
 
-COPY start-container.sh /app/start-container.sh
-RUN chmod +x /app/start-container.sh
-
 WORKDIR /home/project
+
+COPY --from=template-builder /app/agent8-templates /app/agent8-templates
+COPY --from=template-builder /app/agent8-templates/node_modules ./node_modules
+COPY --from=template-builder /app/agent8-templates/pnpm-lock.yaml ./pnpm-lock.yaml
+COPY --from=template-builder /app/agent8-templates/package.json ./package.json
 
 EXPOSE 3000
 
-ENTRYPOINT ["/app/start-container.sh"]
+ENTRYPOINT ["bun", "/app/dist/index.js"]
