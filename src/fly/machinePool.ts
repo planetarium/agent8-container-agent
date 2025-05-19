@@ -86,7 +86,7 @@ export class MachinePool {
       const machinesToAdd = flyMachines.filter((m: { id: string }) => !dbMachineIds.has(m.id));
       if (machinesToAdd.length > 0) {
         await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-          await tx.machine_pool.createMany({
+          await tx.machine_pool.create({
             data: machinesToAdd.map((m: { id: string; private_ip?: string; created_at?: string }) => ({
               machine_id: m.id,
               ipv6: m.private_ip || '',
