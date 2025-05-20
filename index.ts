@@ -27,7 +27,7 @@ function main() {
     });
 
     const machinePool = new MachinePool(flyClient, {
-      defaultPoolSize: parseInt(process.env.DEFAULT_POOL_SIZE || '10'),
+      defaultPoolSize: parseInt(process.env.DEFAULT_POOL_SIZE || '5'),
       checkInterval: parseInt(process.env.CHECK_INTERVAL || '60000')
     });
 
