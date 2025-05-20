@@ -19,6 +19,8 @@ function main() {
     processGroup: process.env.FLY_PROCESS_GROUP || "app",
   };
 
+  console.info("container agent started with " + config.processGroup + " mode");
+
   if (config.processGroup === "scheduler") {
     const flyClient = new FlyClient({
       apiToken: process.env.FLY_API_TOKEN || '',

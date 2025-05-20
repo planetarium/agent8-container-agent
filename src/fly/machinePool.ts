@@ -61,16 +61,15 @@ export class MachinePool {
       const flyMachines = await this.flyClient.listFlyMachines();
       const flyMachineIds = new Set(flyMachines.map((m: any) => m.id));
 
-      // 2. DB 상태 조회 및 동기화 (하나의 트랜잭션으로 처리)
-      await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      // 2. DB 상태 조회 및 동기화 (트랜잭션 범위 축소)
+      const dbMachines = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         // DB에서 머신 목록 조회
-        const dbMachines = await tx.machine_pool.findMany({
+        const machines = await tx.machine_pool.findMany({
           where: { deleted: false },
         });
-        const dbMachineIds = new Set(dbMachines.map((m: { machine_id: string }) => m.machine_id));
-
+        const dbMachineIds = new Set(machines.map((m: { machine_id: string }) => m.machine_id));
         // 3. DB에는 있는데 실제로 없는 머신 → soft delete
-        const machinesToDelete = dbMachines.filter((m: { machine_id: string }) => !flyMachineIds.has(m.machine_id));
+        const machinesToDelete = machines.filter((m: { machine_id: string }) => !flyMachineIds.has(m.machine_id));
         if (machinesToDelete.length > 0) {
           await tx.machine_pool.updateMany({
             where: {
@@ -79,7 +78,6 @@ export class MachinePool {
             data: { deleted: true }
           });
         }
-
         // 4. 실제로는 있는데 DB에 없는 머신 → DB에 추가
         const machinesToAdd = flyMachines.filter((m: { id: string }) => !dbMachineIds.has(m.id));
         if (machinesToAdd.length > 0) {
@@ -93,23 +91,24 @@ export class MachinePool {
             }))
           });
         }
+        return machines;
       });
 
-      // 5. 정상 머신만 카운트해서 풀 사이즈 유지
+      // 5. 정상 머신만 카운트해서 풀 사이즈 유지 (트랜잭션 밖)
       const healthyMachines = flyMachines.filter((m: any) => m.state === 'started');
       if (healthyMachines.length < this.defaultPoolSize) {
         const toCreate = this.defaultPoolSize - healthyMachines.length;
-        // 순차적으로 머신 생성
-        for (let i = 0; i < toCreate; i++) {
-          await this.createNewMachine();
-        }
+        await this.createNewMachines(toCreate);
       } else if (healthyMachines.length > this.defaultPoolSize) {
         const toDelete = healthyMachines.length - this.defaultPoolSize;
         const machinesToDelete = healthyMachines.slice(0, toDelete);
-        // 순차적으로 머신 삭제
         for (const machine of machinesToDelete) {
-          await this.flyClient.destroyMachine(machine.id);
-          await this.softDeleteMachine(machine.id);
+          // 1. DB에서 soft delete 먼저 시도
+          const deleted = await this.softDeleteMachine(machine.id);
+          // 2. soft delete가 실제로 일어난 경우에만 Fly API로 삭제
+          if (deleted) {
+            await this.flyClient.destroyMachine(machine.id);
+          }
         }
       }
     } catch (error) {
@@ -118,69 +117,54 @@ export class MachinePool {
   }
 
   /**
-   * Create a new machine and add it to the pool
+   * Create multiple new machines in parallel and add them to the pool
    */
-  private async createNewMachine(): Promise<string | null> {
-    try {
-      const image = await this.flyClient.getImageRef();
-      if (!image) {
-        console.error('Failed to get image reference');
-        return null;
-      }
-
-      const options = {
-        name: `pool-${Date.now()}`,
-        region: "nrt",
-        image,
-        env: {
-          FLY_PROCESS_GROUP: "worker",
-          PORT: "3000",
-          PRIMARY_REGION: "nrt"
-        },
-        services: [
-          {
-            protocol: "tcp",
-            internal_port: 3000,
-            ports: [
-              { port: 80, handlers: ["http"] },
-              { port: 443, handlers: ["tls", "http"] }
-            ]
-          }
-        ],
-        resources: {
-          cpu_kind: "shared",
-          cpus: 1,
-          memory_mb: 1024
+  private async createNewMachines(count: number): Promise<void> {
+    const image = await this.flyClient.getImageRef();
+    if (!image) {
+      console.error('Failed to get image reference');
+    }
+    const optionsList = Array.from({ length: count }, () => ({
+      name: `pool-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      region: "nrt",
+      image,
+      env: {
+        FLY_PROCESS_GROUP: "worker",
+        PORT: "3000",
+        PRIMARY_REGION: "nrt"
+      },
+      services: [
+        {
+          protocol: "tcp",
+          internal_port: 3000,
+          ports: [
+            { port: 80, handlers: ["http"] },
+            { port: 443, handlers: ["tls", "http"] }
+          ]
         }
-      };
-
-<<<<<<< HEAD
-      const machine = await this.flyClient.createMachine(options, 0);
-=======
-      const machine = await this.flyClient.createMachine(options);
->>>>>>> 0071d49 (Fix schema)
-      if (!machine || !machine.id) {
-        console.error('Failed to create machine: No machine or machine ID returned');
-        return null;
+      ],
+      resources: {
+        cpu_kind: "shared",
+        cpus: 1,
+        memory_mb: 1024
       }
-
-      // Add machine to database
-      await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-        await tx.machine_pool.create({
-          data: {
-            machine_id: machine.id,
-            ipv6: machine.private_ip || '',
+    }));
+    // Fly API에 병렬로 머신 생성 요청
+    const machines = await Promise.all(optionsList.map(opt => this.flyClient.createMachine(opt, 0)));
+    const validMachines = machines.filter(m => m && m.id);
+    if (validMachines.length > 0) {
+      // DB에 한꺼번에 저장 (항상 트랜잭션 사용)
+      await prisma.$transaction(async (tx) => {
+        await tx.machine_pool.createMany({
+          data: validMachines.map((m: any) => ({
+            machine_id: m.id,
+            ipv6: m.private_ip || '',
             deleted: false,
             is_available: true,
-            created_at: new Date(machine.created_at || Date.now()),
-          }
+            created_at: new Date(m.created_at || Date.now()),
+          }))
         });
       });
-
-      return machine.id;
-    } catch (error) {
-      console.error('Error creating new machine:', error);
-      return null;
     }
   }
 
@@ -333,9 +317,11 @@ export class MachinePool {
 
   /**
    * Soft delete a machine in the database, only if not in use
+   * Returns true if actually soft deleted, false otherwise
    */
-  async softDeleteMachine(machineId: string): Promise<void> {
-    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+  async softDeleteMachine(machineId: string): Promise<boolean> {
+    let deleted = false;
+    await prisma.$transaction(async (tx) => {
       // 머신이 사용 중인지 확인
       const machine = await tx.machine_pool.findFirst({
         where: { machine_id: machineId },
@@ -347,6 +333,8 @@ export class MachinePool {
         where: { machine_id: machineId },
         data: { deleted: true },
       });
+      deleted = true;
     });
+    return deleted;
   }
 }
