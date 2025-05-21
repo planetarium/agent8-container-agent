@@ -15,6 +15,7 @@ primary_region = 'nrt'
 [[services]]
   protocol = 'tcp'
   internal_port = 3000
+  processes = ["app"]
 
   [[services.ports]]
     port = 80
@@ -32,3 +33,7 @@ primary_region = 'nrt'
   memory = '1gb'
   cpu_kind = 'shared'
   cpus = 1
+
+[processes]
+  app = ""
+  scheduler = ""
