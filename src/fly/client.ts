@@ -5,12 +5,24 @@ const prisma = new PrismaClient();
 
 export class FlyClient {
   private config: FlyConfig;
+  private fallbackRegions: string[] = [];
+  private RETRY_LIMIT = 3;
 
   constructor(config: FlyConfig) {
     this.config = {
       ...config,
       baseUrl: config.baseUrl || 'https://api.machines.dev/v1'
     };
+    this.updateFallbackRegions();
+  }
+
+  async updateFallbackRegions(): Promise<void> {
+    if (!this.fallbackRegions.length) {
+      const res = await fetch(`https://api.machines.dev/v1/platform/regions`);
+      this.fallbackRegions = (await res.json() as { Regions: Record<string, unknown>[] }).Regions
+        .filter((region) => !region.requires_paid_plan && (region.capacity as number) > 100)
+        .map((region) => region.code as string);
+    }
   }
 
   /**
@@ -18,7 +30,7 @@ export class FlyClient {
    * @param options - Machine creation options (must include user token)
    * @param token - User token to associate with the machine
    */
-  async createMachine(options: CreateMachineOptions, token: string): Promise<Machine> {
+  async createMachine(options: CreateMachineOptions, token: string, retry: number = 0): Promise<Machine> {
     try {
       const res = await fetch(`${this.config.baseUrl}/apps/${this.config.appName}/machines`, {
         method: "POST",
@@ -41,6 +53,11 @@ export class FlyClient {
       });
 
       if (!res.ok) {
+        if (retry < this.RETRY_LIMIT) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          const randomIdx = Math.floor(Math.random() * this.fallbackRegions.length);
+          return this.createMachine({ ...options, region: this.fallbackRegions[randomIdx] }, token, retry + 1);
+        }
         throw new Error(`HTTP ${res.status} - ${res.statusText}`);
       }
 
