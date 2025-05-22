@@ -169,30 +169,30 @@ export class MachinePool {
   async getMachine(userId: string): Promise<string | null> {
     try {
       return await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-        // Get an available machine
-        const machine = await tx.machine_pool.findFirst({
-          where: {
-            is_available: true,
-            deleted: false
-          }
-        });
+        // Get and update an available machine atomically
+        const result = await tx.$queryRaw`
+          UPDATE machine_pool
+          SET
+            assigned_to = ${userId},
+            assigned_at = NOW(),
+            is_available = false
+          WHERE id = (
+            SELECT id
+            FROM machine_pool
+            WHERE is_available = true
+              AND deleted = false
+            FOR UPDATE
+            LIMIT 1
+          )
+          RETURNING machine_id
+        `;
 
-        if (!machine) {
+        if (!result || !Array.isArray(result) || result.length === 0) {
           console.log('No available machines in the pool');
           return null;
         }
 
-        // Mark the machine as assigned
-        await tx.machine_pool.update({
-          where: { machine_id: machine.machine_id },
-          data: {
-            assigned_to: userId,
-            assigned_at: new Date(),
-            is_available: false
-          }
-        });
-
-        return machine.machine_id;
+        return result[0].machine_id;
       });
     } catch (error) {
       console.error('Error getting machine from pool:', error);
@@ -295,21 +295,21 @@ export class MachinePool {
    * Returns true if actually soft deleted, false otherwise
    */
   async softDeleteMachine(machineId: string): Promise<boolean> {
-    let deleted = false;
-    await prisma.$transaction(async (tx) => {
-      // 머신이 사용 중인지 확인
-      const machine = await tx.machine_pool.findFirst({
-        where: { machine_id: machineId },
-        select: { assigned_to: true }
+    try {
+      const result = await prisma.$transaction(async (tx) => {
+        const deleted = await tx.$queryRaw<{ machine_id: string }[]>`
+          UPDATE machine_pool
+          SET deleted = true
+          WHERE machine_id = ${machineId}
+            AND assigned_to IS NULL
+          RETURNING machine_id
+        `;
+        return deleted.length > 0;
       });
-      if (!machine) return; // 머신이 없으면 아무것도 하지 않음
-      if (machine.assigned_to !== null) return; // 사용 중이면 삭제하지 않음
-      await tx.machine_pool.updateMany({
-        where: { machine_id: machineId },
-        data: { deleted: true },
-      });
-      deleted = true;
-    });
-    return deleted;
+      return result;
+    } catch (error) {
+      console.error('Error soft deleting machine:', error);
+      return false;
+    }
   }
 }

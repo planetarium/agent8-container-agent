@@ -13,7 +13,8 @@ export class AuthManager {
   }
 
   async verifyToken(token: string): Promise<{ userUid: string, [key: string]: any } | null> {
-    if (!token) return null;
+    if (!token)
+      throw new Error('Token is required');
 
     try {
       const response = await fetch(`${this.authServerUrl}/v1/auth/verify`, {

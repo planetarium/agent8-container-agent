@@ -858,7 +858,7 @@ export class ContainerServer {
         });
 
         if (!machine) {
-          console.info(`[Self-destruction] Machine ${this.machineId} not found in DB`);
+          console.warn(`[Self-destruction] Machine ${this.machineId} not found in DB`);
           return;
         }
 
