@@ -833,11 +833,7 @@ export class ContainerServer {
   }
 
   public async stop(): Promise<void> {
-    if (this.machinePool) {
-      // Release the machine back to the pool instead of destroying it
-      await this.machinePool.releaseMachine(this.machineId);
-    }
-
+    // Kill all processes
     for (const [pid, process] of this.processes.entries()) {
       process.kill();
       this.processes.delete(pid);
@@ -845,7 +841,52 @@ export class ContainerServer {
 
     this.cleanup();
 
+    // Clean up project directory
     await clearDirectory('/home/project');
+
+    // Self-destruction in DB and Fly
+    try {
+      const { PrismaClient } = await import('@prisma/client');
+      const prisma = new PrismaClient();
+      const flyClient = await this.flyClientPromise;
+
+      // Check if machine was ever used and handle cleanup in transaction
+      let shouldDestroy = false;
+      await prisma.$transaction(async (tx) => {
+        const machine = await tx.machine_pool.findUnique({
+          where: { machine_id: this.machineId }
+        });
+
+        if (!machine) {
+          console.info(`[Self-destruction] Machine ${this.machineId} not found in DB`);
+          return;
+        }
+
+        // Only destroy if machine was ever used (is_available is false)
+        if (!machine.is_available) {
+          // Mark as deleted and clear assignment in DB
+          await tx.machine_pool.update({
+            where: { machine_id: this.machineId },
+            data: { 
+              deleted: true,
+              assigned_to: null,
+              is_available: false
+            }
+          });
+          shouldDestroy = true;
+        } else {
+          console.info(`[Self-destruction] Machine ${this.machineId} was never used, skipping destruction`);
+        }
+      });
+
+      // Destroy machine in Fly if needed
+      if (shouldDestroy) {
+        await flyClient.destroyMachine(this.machineId);
+        console.info(`[Self-destruction] Machine ${this.machineId} has been destroyed`);
+      }
+    } catch (error) {
+      console.error('[Self-destruction] Error while cleaning up machine:', error);
+    }
   }
 
   private spawnProcess(

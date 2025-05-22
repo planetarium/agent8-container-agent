@@ -29,7 +29,7 @@ function main() {
     });
 
     const machinePool = new MachinePool(flyClient, {
-      defaultPoolSize: parseInt(process.env.DEFAULT_POOL_SIZE || '50'),
+      defaultPoolSize: parseInt(process.env.DEFAULT_POOL_SIZE || '20'),
       checkInterval: parseInt(process.env.CHECK_INTERVAL || '60000')
     });
 

@@ -94,22 +94,17 @@ export class MachinePool {
         return machines;
       });
 
-      // 5. 정상 머신만 카운트해서 풀 사이즈 유지 (트랜잭션 밖)
-      const healthyMachines = flyMachines.filter((m: any) => m.state === 'started');
-      if (healthyMachines.length < this.defaultPoolSize) {
-        const toCreate = this.defaultPoolSize - healthyMachines.length;
-        await this.createNewMachines(toCreate);
-      } else if (healthyMachines.length > this.defaultPoolSize) {
-        const toDelete = healthyMachines.length - this.defaultPoolSize;
-        const machinesToDelete = healthyMachines.slice(0, toDelete);
-        for (const machine of machinesToDelete) {
-          // 1. DB에서 soft delete 먼저 시도
-          const deleted = await this.softDeleteMachine(machine.id);
-          // 2. soft delete가 실제로 일어난 경우에만 Fly API로 삭제
-          if (deleted) {
-            await this.flyClient.destroyMachine(machine.id);
-          }
+      // 5. 사용 가능한 머신만 카운트해서 풀 사이즈 유지 (트랜잭션 밖)
+      const availableCount = await prisma.machine_pool.count({
+        where: {
+          is_available: true,
+          deleted: false,
+          assigned_to: null,
         }
+      });
+      if (availableCount < this.defaultPoolSize) {
+        const toCreate = this.defaultPoolSize - availableCount;
+        await this.createNewMachines(toCreate);
       }
     } catch (error) {
       console.error('Error checking machine pool:', error);
@@ -202,26 +197,6 @@ export class MachinePool {
     } catch (error) {
       console.error('Error getting machine from pool:', error);
       return null;
-    }
-  }
-
-  /**
-   * Release a machine back to the pool
-   */
-  async releaseMachine(machineId: string): Promise<void> {
-    try {
-      await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-        await tx.machine_pool.update({
-          where: { machine_id: machineId },
-          data: {
-            assigned_to: null,
-            assigned_at: null,
-            is_available: true
-          }
-        });
-      });
-    } catch (error) {
-      console.error('Error releasing machine:', error);
     }
   }
 
