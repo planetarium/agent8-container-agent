@@ -171,7 +171,7 @@ export class MachinePool {
   /**
    * Get an available machine from the pool
    */
-  async getMachine(token: string): Promise<string | null> {
+  async getMachine(userId: string): Promise<string | null> {
     try {
       return await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         // Get an available machine
@@ -191,7 +191,7 @@ export class MachinePool {
         await tx.machine_pool.update({
           where: { machine_id: machine.machine_id },
           data: {
-            assigned_to: token,
+            assigned_to: userId,
             assigned_at: new Date(),
             is_available: false
           }

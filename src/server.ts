@@ -205,7 +205,8 @@ export class ContainerServer {
         "/api/machine": {
           POST: corsMiddleware(async (req: Request) => {
             const token = this.authManager.extractTokenFromHeader(req.headers.get("authorization"));
-            if (!token || !(await this.authManager.verifyToken(token))) {
+            const userInfo = await this.authManager.verifyToken(token);
+            if (!token || !userInfo) {
               return Response.json({ error: "Invalid or missing authorization token" }, { status: 401 });
             }
 
@@ -213,8 +214,8 @@ export class ContainerServer {
               return Response.json({ error: "Machine pool not initialized" }, { status: 500 });
             }
 
-            // Get a machine from the pool instead of creating a new one
-            const machineId = await this.machinePool.getMachine(token);
+            // Get a machine from the pool using userUid
+            const machineId = await this.machinePool.getMachine(userInfo.userUid);
             if (!machineId) {
               return Response.json({ error: "No available machines in the pool" }, { status: 503 });
             }
@@ -228,7 +229,8 @@ export class ContainerServer {
         "/api/machine/:id": {
           GET: corsMiddleware(async (req: Request) => {
             const token = this.authManager.extractTokenFromHeader(req.headers.get("authorization"));
-            if (!token || !(await this.authManager.verifyToken(token))) {
+            const userInfo = await this.authManager.verifyToken(token);
+            if (!token || !userInfo) {
               return Response.json({ error: "Invalid or missing authorization token" }, { status: 401 });
             }
 
@@ -749,7 +751,8 @@ export class ContainerServer {
       const { type, token } = operation;
 
       if (type === "auth" && token) {
-        if (await this.authManager.verifyToken(token)) {
+        const userInfo = await this.authManager.verifyToken(token);
+        if (userInfo) {
           this.authToken = token;
           return { success: true, data: null };
         }
