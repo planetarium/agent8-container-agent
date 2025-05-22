@@ -850,39 +850,24 @@ export class ContainerServer {
       const prisma = new PrismaClient();
       const flyClient = await this.flyClientPromise;
 
-      // Check if machine was ever used and handle cleanup in transaction
-      let shouldDestroy = false;
-      await prisma.$transaction(async (tx) => {
-        const machine = await tx.machine_pool.findUnique({
-          where: { machine_id: this.machineId }
-        });
-
-        if (!machine) {
-          console.warn(`[Self-destruction] Machine ${this.machineId} not found in DB`);
-          return;
-        }
-
-        // Only destroy if machine was ever used (is_available is false)
-        if (!machine.is_available) {
-          // Mark as deleted and clear assignment in DB
-          await tx.machine_pool.update({
-            where: { machine_id: this.machineId },
-            data: { 
-              deleted: true,
-              assigned_to: null,
-              is_available: false
-            }
-          });
-          shouldDestroy = true;
-        } else {
-          console.info(`[Self-destruction] Machine ${this.machineId} was never used, skipping destruction`);
-        }
-      });
-
-      // Destroy machine in Fly if needed
-      if (shouldDestroy) {
+      // First try to destroy machine in Fly
+      try {
         await flyClient.destroyMachine(this.machineId);
-        console.info(`[Self-destruction] Machine ${this.machineId} has been destroyed`);
+        console.info(`[Self-destruction] Machine ${this.machineId} has been destroyed in Fly`);
+
+        // Only after successful Fly deletion, mark as deleted in DB
+        await prisma.machine_pool.update({
+          where: { machine_id: this.machineId },
+          data: {
+            deleted: true,
+            assigned_to: null,
+            is_available: false
+          }
+        });
+        console.info(`[Self-destruction] Machine ${this.machineId} has been marked as deleted in DB`);
+      } catch (error) {
+        console.error(`[Self-destruction] Failed to destroy machine ${this.machineId} in Fly:`, error);
+        // Don't mark as deleted in DB if Fly deletion failed
       }
     } catch (error) {
       console.error('[Self-destruction] Error while cleaning up machine:', error);
