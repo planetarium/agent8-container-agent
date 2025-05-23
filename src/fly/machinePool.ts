@@ -174,7 +174,7 @@ export class MachinePool {
       const optionsList = await Promise.all(
         Array.from({ length: count }, () => this.getMachineCreationOptions())
       );
-      
+
       // Fly API에 병렬로 머신 생성 요청
       const machines = await Promise.all(optionsList.map(opt => this.flyClient.createMachine(opt, 0)));
       const validMachines = machines.filter(m => m && m.id);

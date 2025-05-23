@@ -863,6 +863,7 @@ export class ContainerServer {
       // Only destroy if machine is not available (has been used)
       if (!machine.is_available) {
         try {
+          const flyClient = await this.flyClientPromise;
           await flyClient.destroyMachine(this.machineId);
           console.info(`[Self-destruction] Machine ${this.machineId} has been destroyed in Fly`);
         } catch (error) {
