@@ -214,10 +214,17 @@ export class ContainerServer {
               return Response.json({ error: "Machine pool not initialized" }, { status: 500 });
             }
 
-            // Get a machine from the pool using userUid
-            const machineId = await this.machinePool.getMachine(userInfo.userUid);
+            // Get a machine from the pool
+            let machineId = await this.machinePool.getMachine(userInfo.userUid);
+
+            // If no machine is available, create a new one and assign it
             if (!machineId) {
-              return Response.json({ error: "No available machines in the pool" }, { status: 503 });
+              console.info(`[Machine Pool] No available machines, creating a new one for user ${userInfo.userUid}`);
+              machineId = await this.machinePool.createNewMachineWithUser(userInfo.userUid);
+
+              if (!machineId) {
+                return Response.json({ error: "Failed to create and assign new machine" }, { status: 503 });
+              }
             }
 
             return Response.json({ machine_id: machineId });

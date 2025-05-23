@@ -112,14 +112,34 @@ export class MachinePool {
   }
 
   /**
-   * Create multiple new machines in parallel and add them to the pool
+   * Get machine creation options
    */
-  private async createNewMachines(count: number): Promise<void> {
+  private async getMachineCreationOptions(): Promise<{
+    name: string;
+    region: string;
+    image: string;
+    env: {
+      FLY_PROCESS_GROUP: string;
+      PORT: string;
+      PRIMARY_REGION: string;
+    };
+    services: {
+      protocol: string;
+      internal_port: number;
+      ports: { port: number; handlers: string[] }[];
+    }[];
+    resources: {
+      cpu_kind: string;
+      cpus: number;
+      memory_mb: number;
+    };
+  }> {
     const image = await this.flyClient.getImageRef();
     if (!image) {
-      console.error('Failed to get image reference');
+      throw new Error('Failed to get image reference');
     }
-    const optionsList = Array.from({ length: count }, () => ({
+
+    return {
       name: `pool-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       region: "nrt",
       image,
@@ -140,26 +160,75 @@ export class MachinePool {
       ],
       resources: {
         cpu_kind: "shared",
-        cpus: 1,
-        memory_mb: 1024
+        cpus: 2,
+        memory_mb: 2048
       }
-    }));
-    // Fly API에 병렬로 머신 생성 요청
-    const machines = await Promise.all(optionsList.map(opt => this.flyClient.createMachine(opt, 0)));
-    const validMachines = machines.filter(m => m && m.id);
-    if (validMachines.length > 0) {
-      // DB에 한꺼번에 저장 (항상 트랜잭션 사용)
-      await prisma.$transaction(async (tx) => {
-        await tx.machine_pool.createMany({
-          data: validMachines.map((m: any) => ({
-            machine_id: m.id,
-            ipv6: m.private_ip || '',
-            deleted: false,
-            is_available: true,
-            created_at: new Date(m.created_at || Date.now()),
-          }))
+    };
+  }
+
+  /**
+   * Create multiple new machines in parallel and add them to the pool
+   */
+  private async createNewMachines(count: number): Promise<void> {
+    try {
+      const optionsList = await Promise.all(
+        Array.from({ length: count }, () => this.getMachineCreationOptions())
+      );
+      
+      // Fly API에 병렬로 머신 생성 요청
+      const machines = await Promise.all(optionsList.map(opt => this.flyClient.createMachine(opt, 0)));
+      const validMachines = machines.filter(m => m && m.id);
+      if (validMachines.length > 0) {
+        // DB에 한꺼번에 저장 (항상 트랜잭션 사용)
+        await prisma.$transaction(async (tx) => {
+          await tx.machine_pool.createMany({
+            data: validMachines.map((m: any) => ({
+              machine_id: m.id,
+              ipv6: m.private_ip || '',
+              deleted: false,
+              is_available: true,
+              created_at: new Date(m.created_at || Date.now()),
+            }))
+          });
         });
+      }
+    } catch (error) {
+      console.error('Error creating new machines:', error);
+    }
+  }
+
+  /**
+   * Create a new machine and assign it to a user in a single transaction
+   */
+  async createNewMachineWithUser(userId: string): Promise<string | null> {
+    try {
+      const options = await this.getMachineCreationOptions();
+      const machine = await this.flyClient.createMachine(options, 0);
+      if (!machine || !machine.id) {
+        console.error('Failed to create new machine');
+        return null;
+      }
+
+      // Create and assign machine in a single transaction
+      const result = await prisma.$transaction(async (tx) => {
+        const created = await tx.machine_pool.create({
+          data: {
+            machine_id: machine.id,
+            ipv6: machine.private_ip || '',
+            deleted: false,
+            is_available: false,
+            assigned_to: userId,
+            assigned_at: new Date(),
+            created_at: new Date(machine.created_at || Date.now()),
+          }
+        });
+        return created.machine_id;
       });
+
+      return result;
+    } catch (error) {
+      console.error('Error creating and assigning new machine:', error);
+      return null;
     }
   }
 
