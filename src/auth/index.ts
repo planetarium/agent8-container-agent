@@ -12,7 +12,7 @@ export class AuthManager {
     this.authServerUrl = config.authServerUrl;
   }
 
-  async verifyToken(token: string): Promise<{ userUid: string, [key: string]: any } | null> {
+  async verifyToken(token: string): Promise<{ userUid: string, [key: string]: any }> {
     if (!token)
       throw new Error('Token is required');
 
@@ -26,16 +26,14 @@ export class AuthManager {
       });
 
       if (!response.ok) {
-        console.error('Token verification failed:', response.statusText);
-        return null;
+        throw new Error(`Token verification failed: ${response.statusText}`);
       }
 
       const userInfo = await response.json();
-      if (!userInfo.userUid) return null;
+      if (!userInfo.userUid) throw new Error(`userUid doesn't exist in the response`);
       return userInfo;
     } catch (error) {
-      console.error('Error verifying token:', error);
-      return null;
+      throw new Error(`Error verifying token: ${error}`);
     }
   }
 

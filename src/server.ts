@@ -846,14 +846,7 @@ export class ContainerServer {
 
     // Self-destruction in DB and Fly
     try {
-      const { PrismaClient } = await import('@prisma/client');
-      const prisma = new PrismaClient();
-      const flyClient = await this.flyClientPromise;
-
-      // Check if machine is available before destroying
-      const machine = await prisma.machine_pool.findUnique({
-        where: { machine_id: this.machineId }
-      });
+      const machine = await this.machinePool?.getMachineById(this.machineId);
 
       if (!machine) {
         console.warn(`[Self-destruction] Machine ${this.machineId} not found in DB`);
