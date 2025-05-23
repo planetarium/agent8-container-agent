@@ -850,24 +850,26 @@ export class ContainerServer {
       const prisma = new PrismaClient();
       const flyClient = await this.flyClientPromise;
 
-      // First try to destroy machine in Fly
-      try {
-        await flyClient.destroyMachine(this.machineId);
-        console.info(`[Self-destruction] Machine ${this.machineId} has been destroyed in Fly`);
+      // Check if machine is available before destroying
+      const machine = await prisma.machine_pool.findUnique({
+        where: { machine_id: this.machineId }
+      });
 
-        // Only after successful Fly deletion, mark as deleted in DB
-        await prisma.machine_pool.update({
-          where: { machine_id: this.machineId },
-          data: {
-            deleted: true,
-            assigned_to: null,
-            is_available: false
-          }
-        });
-        console.info(`[Self-destruction] Machine ${this.machineId} has been marked as deleted in DB`);
-      } catch (error) {
-        console.error(`[Self-destruction] Failed to destroy machine ${this.machineId} in Fly:`, error);
-        // Don't mark as deleted in DB if Fly deletion failed
+      if (!machine) {
+        console.warn(`[Self-destruction] Machine ${this.machineId} not found in DB`);
+        return;
+      }
+
+      // Only destroy if machine is not available (has been used)
+      if (!machine.is_available) {
+        try {
+          await flyClient.destroyMachine(this.machineId);
+          console.info(`[Self-destruction] Machine ${this.machineId} has been destroyed in Fly`);
+        } catch (error) {
+          console.error(`[Self-destruction] Failed to destroy machine ${this.machineId} in Fly:`, error);
+        }
+      } else {
+        console.info(`[Self-destruction] Machine ${this.machineId} is still available, skipping destruction`);
       }
     } catch (error) {
       console.error('[Self-destruction] Error while cleaning up machine:', error);
