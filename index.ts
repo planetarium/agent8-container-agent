@@ -1,8 +1,6 @@
 import process from "node:process";
 import { ContainerServer } from "@/server";
 import dotenv from "dotenv";
-import { MachinePool } from "./src/fly/machinePool";
-import { FlyClient } from "./src/fly";
 
 // Load environment variables from .env file
 dotenv.config();
@@ -19,45 +17,27 @@ function main() {
     processGroup: process.env.FLY_PROCESS_GROUP || "app",
   };
 
-  console.info("container agent started with " + config.processGroup + " mode");
+  console.info("Container agent started with " + config.processGroup + " mode");
 
-  if (config.processGroup === "scheduler") {
-    const flyClient = new FlyClient({
-      apiToken: process.env.FLY_API_TOKEN || '',
-      appName: process.env.TARGET_APP_NAME || '',
-      imageRef: process.env.FLY_IMAGE_REF
-    });
+  // Simplified: all instances run the same ContainerServer
+  const server = new ContainerServer(config);
 
-    const machinePool = new MachinePool(flyClient, {
-      defaultPoolSize: parseInt(process.env.DEFAULT_POOL_SIZE || '20'),
-      checkInterval: parseInt(process.env.CHECK_INTERVAL || '60000')
-    });
-
-    machinePool.start().catch(console.error);
-
-    // Handle graceful shutdown
+  try {
+    // Handle shutdown gracefully
     process.on("SIGINT", () => {
-      machinePool.stop();
+      console.log("Received SIGINT, shutting down gracefully");
+      server.stop();
       process.exit(0);
     });
 
     process.on("SIGTERM", () => {
-      machinePool.stop();
+      console.log("Received SIGTERM, shutting down gracefully");
+      server.stop();
       process.exit(0);
     });
-  } else {
-    const server = new ContainerServer(config);
-
-    try {
-      // Handle shutdown gracefully
-      process.on("SIGINT", () => {
-        server.stop();
-        process.exit(0);
-      });
-    } catch (error) {
-      process.stderr.write(`Error: ${error instanceof Error ? error.message : "Unknown error"}\n`);
-      process.exit(1);
-    }
+  } catch (error) {
+    process.stderr.write(`Error: ${error instanceof Error ? error.message : "Unknown error"}\n`);
+    process.exit(1);
   }
 }
 

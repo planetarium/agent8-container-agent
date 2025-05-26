@@ -144,20 +144,24 @@ export class ContainerServer {
       imageRef: process.env.FLY_IMAGE_REF || '',
     });
 
-    // Initialize machine pool only from pool
+        // Initialize machine pool (simplified - no scheduler needed)
     this.flyClientPromise.then(flyClient => {
-      this.machinePool = new MachinePool(flyClient, {
-        defaultPoolSize: 10,  // 최대 3개의 머신
-        checkInterval: 60000  // 1분마다 체크
-      });
+      this.machinePool = new MachinePool(flyClient);
+
+      // Initial warmup after server startup
+      globalThis.setTimeout(() => {
+        this.warmupPool().catch((error: Error) => {
+          console.error('[Warmup] Failed:', error);
+        });
+      }, 10000); // 10 seconds after startup
     });
 
     this.portScanner.start().then(() => {
-      console.log('스캐너가 시작되었습니다.');
+      console.log('Port scanner started successfully.');
     });
 
     this.portScanner.on('portAdded', (event: CandidatePort) => {
-      console.log("🔓 포트가 열렸습니다!" + event.port);
+      console.log("🔓 Port opened: " + event.port);
       const url = `https://${this.appName}-${this.machineId}.${this.routerDomain}`;
       const message = JSON.stringify({
         data: {
@@ -175,7 +179,7 @@ export class ContainerServer {
     });
 
     this.portScanner.on('portRemoved', (event: CandidatePort) => {
-      console.log("🔓 포트가 닫혔습니다!" + event.port);
+      console.log("🔓 Port closed: " + event.port);
       const url = `https://${this.appName}-${this.machineId}.${this.routerDomain}`;
       const message = JSON.stringify({
         data: {
@@ -218,20 +222,34 @@ export class ContainerServer {
               return Response.json({ error: "Machine pool not initialized" }, { status: 500 });
             }
 
-            // Get a machine from the pool
-            let machineId = await this.machinePool.getMachine(userInfo.userUid);
+            try {
+              console.log(`[API] Machine request from user ${userInfo.userUid}`);
 
-            // If no machine is available, create a new one and assign it
-            if (!machineId) {
-              console.info(`[Machine Pool] No available machines, creating a new one for user ${userInfo.userUid}`);
-              machineId = await this.machinePool.createNewMachineWithUser(userInfo.userUid);
+              // 1. Get a machine from the pool
+              let machineId = await this.machinePool.getMachine(userInfo.userUid);
 
+              // 2. If no machine is available, create a new one and assign it
               if (!machineId) {
-                return Response.json({ error: "Failed to create and assign new machine" }, { status: 503 });
-              }
-            }
+                console.info(`[API] No available machines, creating new one for user ${userInfo.userUid}`);
+                machineId = await this.machinePool.createNewMachineWithUser(userInfo.userUid);
 
-            return Response.json({ machine_id: machineId });
+                if (!machineId) {
+                  return Response.json({ error: "Failed to create and assign new machine" }, { status: 503 });
+                }
+              }
+
+              // 3. Background replenishment (non-blocking)
+              this.machinePool.scheduleReplenishIfNeeded().catch((error: Error) => {
+                console.error('[API] Background replenish failed:', error);
+              });
+
+              console.log(`[API] Successfully provided machine ${machineId} to user ${userInfo.userUid}`);
+              return Response.json({ machine_id: machineId });
+
+            } catch (error) {
+              console.error(`[API] Error in machine allocation for user ${userInfo.userUid}:`, error);
+              return Response.json({ error: "Internal server error" }, { status: 500 });
+            }
           }),
           OPTIONS: corsMiddleware((req: Request) => {
             return new Response(null, { status: 204 });
@@ -294,10 +312,18 @@ export class ContainerServer {
             const host = req.headers.get("host");
             const querySuccess = await Promise.race([
               (await this.flyClientPromise).listFlyMachines(),
-              setTimeout(1000),
+              new Promise(resolve => globalThis.setTimeout(resolve, 1000)),
             ])
               .then(() => true)
               .catch(() => false);
+
+            // Optional cleanup during health checks (non-blocking)
+            if (querySuccess && this.machinePool) {
+              this.machinePool.cleanupOrphanedMachines().catch((error: Error) => {
+                console.error('[Health] Cleanup failed:', error);
+              });
+            }
+
             return Response.json({
               success: querySuccess,
               host,
@@ -1148,6 +1174,29 @@ export class ContainerServer {
     this.fileWatchClients.clear();
     this.clientWatchers.clear();
     this.processClients.clear();
+  }
+
+  /**
+   * Initial warmup of the machine pool
+   */
+  private async warmupPool(): Promise<void> {
+    if (!this.machinePool) return;
+
+    console.log('[Warmup] Starting initial pool warmup');
+
+    try {
+      const availableCount = await this.machinePool.getAvailableCount();
+      const targetBuffer = 2; // Initial buffer size
+
+      if (availableCount < targetBuffer) {
+        console.log(`[Warmup] Current: ${availableCount}, Target: ${targetBuffer}`);
+        await this.machinePool.scheduleReplenishIfNeeded();
+      } else {
+        console.log(`[Warmup] Pool already sufficient (${availableCount}/${targetBuffer})`);
+      }
+    } catch (error) {
+      console.error('[Warmup] Error during warmup:', error);
+    }
   }
 }
 
