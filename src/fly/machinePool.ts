@@ -79,7 +79,8 @@ export class MachinePool {
               deleted: false,
               is_available: true,
               created_at: new Date(m.created_at || Date.now()),
-            }))
+            })),
+            skipDuplicates: true,
           });
         }
         return machines;
@@ -179,7 +180,8 @@ export class MachinePool {
               deleted: false,
               is_available: true,
               created_at: new Date(m.created_at || Date.now()),
-            }))
+            })),
+            skipDuplicates: true,
           });
         });
       }
