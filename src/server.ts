@@ -205,8 +205,7 @@ export class ContainerServer {
         "/api/machine": {
           POST: corsMiddleware(async (req: Request) => {
             const token = this.authManager.extractTokenFromHeader(req.headers.get("authorization"));
-            const userInfo = await this.authManager.verifyToken(token);
-            if (!token || !userInfo) {
+            if (!token || !(await this.authManager.verifyToken(token))) {
               return Response.json({ error: "Invalid or missing authorization token" }, { status: 401 });
             }
 
@@ -214,17 +213,10 @@ export class ContainerServer {
               return Response.json({ error: "Machine pool not initialized" }, { status: 500 });
             }
 
-            // Get a machine from the pool
-            let machineId = await this.machinePool.getMachine(userInfo.userUid);
-
-            // If no machine is available, create a new one and assign it
+            // Get a machine from the pool instead of creating a new one
+            const machineId = await this.machinePool.getMachine(token);
             if (!machineId) {
-              console.info(`[Machine Pool] No available machines, creating a new one for user ${userInfo.userUid}`);
-              machineId = await this.machinePool.createNewMachineWithUser(userInfo.userUid);
-
-              if (!machineId) {
-                return Response.json({ error: "Failed to create and assign new machine" }, { status: 503 });
-              }
+              return Response.json({ error: "No available machines in the pool" }, { status: 503 });
             }
 
             return Response.json({ machine_id: machineId });
@@ -236,8 +228,7 @@ export class ContainerServer {
         "/api/machine/:id": {
           GET: corsMiddleware(async (req: Request) => {
             const token = this.authManager.extractTokenFromHeader(req.headers.get("authorization"));
-            const userInfo = await this.authManager.verifyToken(token);
-            if (!token || !userInfo) {
+            if (!token || !(await this.authManager.verifyToken(token))) {
               return Response.json({ error: "Invalid or missing authorization token" }, { status: 401 });
             }
 
@@ -758,8 +749,7 @@ export class ContainerServer {
       const { type, token } = operation;
 
       if (type === "auth" && token) {
-        const userInfo = await this.authManager.verifyToken(token);
-        if (userInfo) {
+        if (await this.authManager.verifyToken(token)) {
           this.authToken = token;
           return { success: true, data: null };
         }
@@ -840,7 +830,11 @@ export class ContainerServer {
   }
 
   public async stop(): Promise<void> {
-    // Kill all processes
+    if (this.machinePool) {
+      // Release the machine back to the pool instead of destroying it
+      await this.machinePool.releaseMachine(this.machineId);
+    }
+
     for (const [pid, process] of this.processes.entries()) {
       process.kill();
       this.processes.delete(pid);
@@ -848,33 +842,7 @@ export class ContainerServer {
 
     this.cleanup();
 
-    // Clean up project directory
     await clearDirectory('/home/project');
-
-    // Self-destruction in DB and Fly
-    try {
-      const machine = await this.machinePool?.getMachineById(this.machineId);
-
-      if (!machine) {
-        console.warn(`[Self-destruction] Machine ${this.machineId} not found in DB`);
-        return;
-      }
-
-      // Only destroy if machine is not available (has been used)
-      if (!machine.is_available) {
-        try {
-          const flyClient = await this.flyClientPromise;
-          await flyClient.destroyMachine(this.machineId);
-          console.info(`[Self-destruction] Machine ${this.machineId} has been destroyed in Fly`);
-        } catch (error) {
-          console.error(`[Self-destruction] Failed to destroy machine ${this.machineId} in Fly:`, error);
-        }
-      } else {
-        console.info(`[Self-destruction] Machine ${this.machineId} is still available, skipping destruction`);
-      }
-    } catch (error) {
-      console.error('[Self-destruction] Error while cleaning up machine:', error);
-    }
   }
 
   private spawnProcess(
