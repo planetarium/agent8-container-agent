@@ -42,11 +42,11 @@ export class MachinePool {
   async scheduleReplenishIfNeeded(): Promise<void> {
     try {
       // Try to acquire non-blocking session-level advisory lock
-      const lockAcquired = await prisma.$queryRaw<{ acquired: boolean }[]>`
+      const lockResult = await prisma.$queryRaw<{ acquired: boolean }[]>`
         SELECT pg_try_advisory_lock(${MachinePool.REPLENISH_LOCK_ID}) as acquired
       `;
 
-      if (!lockAcquired[0]?.acquired) {
+      if (!lockResult[0]?.acquired) {
         console.log('[Replenish] Another process is already replenishing, skipping');
         return;
       }
@@ -61,7 +61,7 @@ export class MachinePool {
     } finally {
       // Always release the lock
       try {
-        await prisma.$queryRaw`SELECT pg_advisory_unlock(${MachinePool.REPLENISH_LOCK_ID})`;
+        await prisma.$executeRaw`SELECT pg_advisory_unlock(${MachinePool.REPLENISH_LOCK_ID})`;
         console.log('[Replenish] Lock released');
       } catch (unlockError) {
         console.error('[Replenish] Failed to release lock:', unlockError);
@@ -183,9 +183,7 @@ export class MachinePool {
   async createNewMachineWithUser(userId: string): Promise<string | null> {
     try {
       // Acquire blocking lock for sequential processing
-      const lockAcquired = await prisma.$queryRaw<{ acquired: boolean }[]>`
-        SELECT pg_advisory_lock(${MachinePool.CREATE_LOCK_ID}) as acquired
-      `;
+      await prisma.$executeRaw`SELECT pg_advisory_lock(${MachinePool.CREATE_LOCK_ID})`;
 
       console.log(`[UserCreate] Lock acquired for user ${userId}`);
 
@@ -224,7 +222,7 @@ export class MachinePool {
     } finally {
       // Release lock
       try {
-        await prisma.$queryRaw`SELECT pg_advisory_unlock(${MachinePool.CREATE_LOCK_ID})`;
+        await prisma.$executeRaw`SELECT pg_advisory_unlock(${MachinePool.CREATE_LOCK_ID})`;
         console.log(`[UserCreate] Lock released for user ${userId}`);
       } catch (unlockError) {
         console.error('[UserCreate] Failed to release lock:', unlockError);
