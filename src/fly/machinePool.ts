@@ -38,38 +38,106 @@ export class MachinePool {
 
   /**
    * Schedule background replenishment if needed (non-blocking)
+   * Uses reservation system with new schema fields
    */
   async scheduleReplenishIfNeeded(): Promise<void> {
     try {
-      // Try to acquire non-blocking session-level advisory lock
-      const lockResult = await prisma.$queryRaw<{ acquired: boolean }[]>`
-        SELECT pg_try_advisory_lock(${MachinePool.REPLENISH_LOCK_ID}) as acquired
-      `;
+      // 1단계: 트랜잭션 기반 락으로 예약 생성
+      const reservation = await prisma.$transaction(async (tx) => {
+        const lockAcquired = await tx.$queryRaw<{ acquired: boolean }[]>`
+          SELECT pg_try_advisory_xact_lock(${MachinePool.REPLENISH_LOCK_ID}) as acquired
+        `;
 
-      if (!lockResult[0]?.acquired) {
-        console.log('[Replenish] Another process is already replenishing, skipping');
-        return;
+        if (!lockAcquired[0]?.acquired) {
+          console.log('[Replenish] Another process is already replenishing, skipping');
+          return null;
+        }
+
+        // 진행 중인 예약 확인
+        const existingReservations = await tx.machine_pool.count({
+          where: {
+            status: 'reserved',
+            reservation_type: 'replenish',
+            expires_at: { gt: new Date() }
+          }
+        });
+
+        if (existingReservations > 0) {
+          console.log(`[Replenish] ${existingReservations} reservations already pending, skipping`);
+          return null;
+        }
+
+        // 실제 사용 가능한 머신 수 확인 (예약 중인 것 제외)
+        const currentAvailable = await tx.machine_pool.count({
+          where: {
+            status: 'active',
+            is_available: true,
+            deleted: false,
+            assigned_to: null,
+          }
+        });
+
+        if (currentAvailable >= this.targetBufferSize) {
+          console.log(`[Replenish] Buffer sufficient (${currentAvailable}/${this.targetBufferSize})`);
+          return null;
+        }
+
+        const toCreate = Math.min(
+          this.targetBufferSize - currentAvailable,
+          this.maxCreationBatch
+        );
+
+        // 예약 슬롯 생성
+        const reservationId = `replenish-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10분 후 만료
+
+        const reservationSlots = [];
+        for (let i = 0; i < toCreate; i++) {
+          const slot = await tx.machine_pool.create({
+            data: {
+              machine_id: `placeholder-${reservationId}-${i}`,
+              status: 'reserved',
+              reservation_id: reservationId,
+              reservation_type: 'replenish',
+              expires_at: expiresAt,
+              is_available: false,
+              deleted: false,
+            }
+          });
+          reservationSlots.push(slot.id);
+        }
+
+        console.log(`[Replenish] Created ${toCreate} reservation slots with ID ${reservationId}`);
+        return { reservationId, toCreate, slotIds: reservationSlots };
+      });
+
+      if (!reservation) return;
+
+      // 2단계: 트랜잭션 외부에서 실제 머신 생성
+      try {
+        console.log(`[Replenish] Creating ${reservation.toCreate} machines for reservation ${reservation.reservationId}`);
+
+        const machines = await this.createMachinesViaFlyAPI(reservation.toCreate);
+
+        // 3단계: 예약된 슬롯을 실제 머신으로 교체
+        await this.replaceReservationsWithMachines(reservation.reservationId, machines);
+
+        console.log(`[Replenish] Successfully completed replenishment for reservation ${reservation.reservationId}`);
+
+      } catch (error) {
+        console.error(`[Replenish] Failed to create machines for reservation ${reservation.reservationId}:`, error);
+
+        // 실패 시 예약 슬롯 정리
+        await this.cleanupFailedReservation(reservation.reservationId);
+        throw error;
       }
-
-      console.log('[Replenish] Lock acquired, starting replenishment');
-
-      // Perform replenishment with lock held
-      await this.performReplenishment();
 
     } catch (error) {
       console.error('[Replenish] Error during replenishment:', error);
-    } finally {
-      // Always release the lock
-      try {
-        await prisma.$executeRaw`SELECT pg_advisory_unlock(${MachinePool.REPLENISH_LOCK_ID})`;
-        console.log('[Replenish] Lock released');
-      } catch (unlockError) {
-        console.error('[Replenish] Failed to release lock:', unlockError);
-      }
     }
   }
 
-    /**
+  /**
    * Perform actual replenishment work
    */
   private async performReplenishment(): Promise<void> {
@@ -325,11 +393,12 @@ export class MachinePool {
   }
 
   /**
-   * Get the count of available machines
+   * Get the count of available machines (excluding reservations)
    */
   async getAvailableCount(): Promise<number> {
     const count = await prisma.machine_pool.count({
       where: {
+        status: 'active',
         is_available: true,
         deleted: false,
         assigned_to: null,
@@ -588,6 +657,105 @@ export class MachinePool {
       }
     } catch (error) {
       console.error('[Cleanup] Error during cleanup:', error);
+    }
+  }
+
+  /**
+   * Create machines via Fly API only (separated from DB operations)
+   */
+  private async createMachinesViaFlyAPI(count: number): Promise<any[]> {
+    if (count <= 0) return [];
+
+    console.log(`[FlyAPI] Creating ${count} machines via Fly API`);
+
+    const optionsList = await Promise.all(
+      Array.from({ length: count }, () => this.getMachineCreationOptions())
+    );
+
+    const machines = await Promise.all(
+      optionsList.map(async (opt, index) => {
+        try {
+          console.log(`[FlyAPI] Creating machine ${index + 1}/${count}`);
+          return await this.flyClient.createMachine(opt, 0);
+        } catch (error) {
+          console.error(`[FlyAPI] Failed to create machine ${index + 1}:`, error);
+          return null;
+        }
+      })
+    );
+
+    const validMachines = machines.filter(m => m && m.id);
+    console.log(`[FlyAPI] Successfully created ${validMachines.length}/${count} machines`);
+
+    return validMachines;
+  }
+
+  /**
+   * Replace reservation slots with actual machines
+   */
+  private async replaceReservationsWithMachines(reservationId: string, machines: any[]): Promise<void> {
+    await prisma.$transaction(async (tx) => {
+      // Get reservation slots
+      const reservationSlots = await tx.machine_pool.findMany({
+        where: {
+          reservation_id: reservationId,
+          status: 'reserved'
+        },
+        orderBy: { id: 'asc' }
+      });
+
+      console.log(`[Replace] Found ${reservationSlots.length} reservation slots for ${machines.length} machines`);
+
+      // Replace slots with actual machines
+      for (let i = 0; i < Math.min(reservationSlots.length, machines.length); i++) {
+        const slot = reservationSlots[i];
+        const machine = machines[i];
+
+        await tx.machine_pool.update({
+          where: { id: slot.id },
+          data: {
+            machine_id: machine.id,
+            status: 'active',
+            ipv6: machine.private_ip || '',
+            is_available: true,
+            reservation_id: null,
+            reservation_type: null,
+            expires_at: null,
+            created_at: new Date(machine.created_at || Date.now()),
+          }
+        });
+
+        console.log(`[Replace] Replaced slot ${slot.id} with machine ${machine.id}`);
+      }
+
+      // Remove excess reservation slots if any
+      if (reservationSlots.length > machines.length) {
+        const excessSlots = reservationSlots.slice(machines.length);
+        await tx.machine_pool.deleteMany({
+          where: {
+            id: { in: excessSlots.map(s => s.id) }
+          }
+        });
+        console.log(`[Replace] Removed ${excessSlots.length} excess reservation slots`);
+      }
+    });
+  }
+
+  /**
+   * Clean up failed reservation slots
+   */
+  private async cleanupFailedReservation(reservationId: string): Promise<void> {
+    try {
+      const deleted = await prisma.machine_pool.deleteMany({
+        where: {
+          reservation_id: reservationId,
+          status: 'reserved'
+        }
+      });
+
+      console.log(`[Cleanup] Removed ${deleted.count} failed reservation slots for ${reservationId}`);
+    } catch (error) {
+      console.error(`[Cleanup] Failed to clean up reservation ${reservationId}:`, error);
     }
   }
 }
