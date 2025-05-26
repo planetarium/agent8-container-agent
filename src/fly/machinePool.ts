@@ -5,13 +5,35 @@ const prisma = new PrismaClient();
 
 export class MachinePool {
   private readonly flyClient: FlyClient;
+  private readonly targetBufferSize: number;
+  private readonly maxCreationBatch: number;
+  private readonly initialBufferSize: number;
 
   // Lock IDs for advisory locks
   private static readonly REPLENISH_LOCK_ID = 100001;
   private static readonly CREATE_LOCK_ID = 100002;
 
-  constructor(flyClient: FlyClient) {
+  constructor(
+    flyClient: FlyClient,
+    options?: {
+      targetBufferSize?: number;
+      maxCreationBatch?: number;
+      initialBufferSize?: number;
+    }
+  ) {
     this.flyClient = flyClient;
+
+    // Pool size configuration with environment variable fallbacks
+    this.targetBufferSize = options?.targetBufferSize ??
+      parseInt(process.env.MACHINE_POOL_TARGET_SIZE || '3');
+
+    this.maxCreationBatch = options?.maxCreationBatch ??
+      parseInt(process.env.MACHINE_POOL_MAX_BATCH || '2');
+
+    this.initialBufferSize = options?.initialBufferSize ??
+      parseInt(process.env.MACHINE_POOL_INITIAL_SIZE || '2');
+
+    console.log(`[MachinePool] Initialized with target: ${this.targetBufferSize}, max batch: ${this.maxCreationBatch}, initial: ${this.initialBufferSize}`);
   }
 
   /**
@@ -47,22 +69,24 @@ export class MachinePool {
     }
   }
 
-  /**
+    /**
    * Perform actual replenishment work
    */
   private async performReplenishment(): Promise<void> {
     // Double-checked locking: verify state after acquiring lock
     const currentAvailable = await this.getAvailableCount();
-    const targetBuffer = 3;
 
-    if (currentAvailable >= targetBuffer) {
-      console.log(`[Replenish] Buffer sufficient (${currentAvailable}/${targetBuffer})`);
+    if (currentAvailable >= this.targetBufferSize) {
+      console.log(`[Replenish] Buffer sufficient (${currentAvailable}/${this.targetBufferSize})`);
       return;
     }
 
-    const toCreate = Math.min(targetBuffer - currentAvailable, 2); // Max 2 at once
+    const toCreate = Math.min(
+      this.targetBufferSize - currentAvailable,
+      this.maxCreationBatch
+    );
 
-    console.info(`[Replenish] Creating ${toCreate} machines (current: ${currentAvailable}, target: ${targetBuffer})`);
+    console.info(`[Replenish] Creating ${toCreate} machines (current: ${currentAvailable}, target: ${this.targetBufferSize})`);
 
     try {
       await this.createNewMachines(toCreate);
@@ -316,6 +340,28 @@ export class MachinePool {
 
     console.log(`[Count] Available machines: ${count}`);
     return count;
+  }
+
+  /**
+   * Get the initial buffer size for warmup
+   */
+  getInitialBufferSize(): number {
+    return this.initialBufferSize;
+  }
+
+  /**
+   * Get current pool configuration
+   */
+  getPoolConfig(): {
+    targetBufferSize: number;
+    maxCreationBatch: number;
+    initialBufferSize: number;
+  } {
+    return {
+      targetBufferSize: this.targetBufferSize,
+      maxCreationBatch: this.maxCreationBatch,
+      initialBufferSize: this.initialBufferSize,
+    };
   }
 
   /**

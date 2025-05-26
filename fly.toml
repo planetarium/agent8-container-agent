@@ -11,6 +11,9 @@ primary_region = 'nrt'
 
 [env]
   PORT = '3000'
+  MACHINE_POOL_TARGET_SIZE = 20
+  MACHINE_POOL_INITIAL_SIZE = 20
+  MACHINE_POOL_MAX_BATCH = 2
 
 [[services]]
   protocol = 'tcp'

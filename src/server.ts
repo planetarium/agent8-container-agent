@@ -144,9 +144,13 @@ export class ContainerServer {
       imageRef: process.env.FLY_IMAGE_REF || '',
     });
 
-        // Initialize machine pool (simplified - no scheduler needed)
+    // Initialize machine pool (simplified - no scheduler needed)
     this.flyClientPromise.then(flyClient => {
-      this.machinePool = new MachinePool(flyClient);
+      this.machinePool = new MachinePool(flyClient, {
+        targetBufferSize: parseInt(process.env.MACHINE_POOL_TARGET_SIZE || '3'),
+        maxCreationBatch: parseInt(process.env.MACHINE_POOL_MAX_BATCH || '2'),
+        initialBufferSize: parseInt(process.env.MACHINE_POOL_INITIAL_SIZE || '2'),
+      });
 
       // Initial warmup after server startup
       globalThis.setTimeout(() => {
@@ -328,6 +332,34 @@ export class ContainerServer {
               success: querySuccess,
               host,
             });
+          })
+        },
+        "/api/pool/status": {
+          GET: corsMiddleware(async (req: Request) => {
+            if (!this.machinePool) {
+              return Response.json({ error: "Machine pool not initialized" }, { status: 503 });
+            }
+
+            try {
+              const availableCount = await this.machinePool.getAvailableCount();
+              const poolConfig = this.machinePool.getPoolConfig();
+              const machines = await this.machinePool.listMachines();
+
+              return Response.json({
+                available: availableCount,
+                total: machines.length,
+                config: poolConfig,
+                machines: machines.map(m => ({
+                  id: m.machine_id,
+                  available: m.is_available,
+                  assigned_to: m.assigned_to,
+                  created_at: m.created_at,
+                })),
+              });
+            } catch (error) {
+              console.error('[Pool Status] Error:', error);
+              return Response.json({ error: "Failed to get pool status" }, { status: 500 });
+            }
           })
         }
       },
@@ -1186,7 +1218,7 @@ export class ContainerServer {
 
     try {
       const availableCount = await this.machinePool.getAvailableCount();
-      const targetBuffer = 2; // Initial buffer size
+      const targetBuffer = this.machinePool.getInitialBufferSize();
 
       if (availableCount < targetBuffer) {
         console.log(`[Warmup] Current: ${availableCount}, Target: ${targetBuffer}`);
