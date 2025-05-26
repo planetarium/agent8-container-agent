@@ -205,9 +205,13 @@ export class ContainerServer {
         "/api/machine": {
           POST: corsMiddleware(async (req: Request) => {
             const token = this.authManager.extractTokenFromHeader(req.headers.get("authorization"));
+            if (!token) {
+              return Response.json({ error: "Missing authorization token" }, { status: 401 });
+            }
+
             const userInfo = await this.authManager.verifyToken(token);
-            if (!token || !userInfo) {
-              return Response.json({ error: "Invalid or missing authorization token" }, { status: 401 });
+            if (!userInfo) {
+              return Response.json({ error: "Invalid authorization token" }, { status: 401 });
             }
 
             if (!this.machinePool) {
@@ -236,9 +240,14 @@ export class ContainerServer {
         "/api/machine/:id": {
           GET: corsMiddleware(async (req: Request) => {
             const token = this.authManager.extractTokenFromHeader(req.headers.get("authorization"));
+
+            if (!token) {
+              return Response.json({ error: "Missing authorization token" }, { status: 401 });
+            }
+
             const userInfo = await this.authManager.verifyToken(token);
-            if (!token || !userInfo) {
-              return Response.json({ error: "Invalid or missing authorization token" }, { status: 401 });
+            if (!userInfo) {
+              return Response.json({ error: "Invalid authorization token" }, { status: 401 });
             }
 
             const machineId = (req as any).params.id;
@@ -284,7 +293,7 @@ export class ContainerServer {
           GET: corsMiddleware(async (req: Request) => {
             const host = req.headers.get("host");
             const querySuccess = await Promise.race([
-              (await this.flyClientPromise).listMachines(),
+              (await this.flyClientPromise).listFlyMachines(),
               setTimeout(1000),
             ])
               .then(() => true)
@@ -1181,10 +1190,10 @@ async function mount(mountPath: string, tree: FileSystemTree) {
 
 async function clearDirectory(dirPath: string): Promise<void> {
   const entries: Dirent[] = await readdir(dirPath, { withFileTypes: true });
-  
+
   for (const entry of entries) {
     const fullPath: string = join(dirPath, entry.name);
-    
+
     if (entry.isDirectory()) {
       // 재귀적으로 하위 디렉토리 내용 삭제 후 디렉토리 삭제
       await clearDirectory(fullPath);
