@@ -3,15 +3,6 @@ import { PrismaClient, Prisma } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
-interface Machine {
-  machine_id: string;
-  deleted: boolean;
-  assigned_to: string | null;
-  assigned_at: Date | null;
-  ipv6: string | null;
-  is_available: boolean;
-}
-
 export class MachinePool {
   private readonly flyClient: FlyClient;
   private readonly defaultPoolSize: number;
@@ -62,7 +53,7 @@ export class MachinePool {
       const flyMachineIds = new Set(flyMachines.map((m: any) => m.id));
 
       // 2. DB 상태 조회 및 동기화 (트랜잭션 범위 축소)
-      const dbMachines = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         // DB에서 머신 목록 조회
         const machines = await tx.machine_pool.findMany({
           where: { deleted: false },
@@ -134,7 +125,7 @@ export class MachinePool {
       memory_mb: number;
     };
   }> {
-    const image = await this.flyClient.getImageRef();
+    const image = this.flyClient.getImageRef();
     if (!image) {
       throw new Error('Failed to get image reference');
     }

@@ -205,9 +205,13 @@ export class ContainerServer {
         "/api/machine": {
           POST: corsMiddleware(async (req: Request) => {
             const token = this.authManager.extractTokenFromHeader(req.headers.get("authorization"));
+            if (!token) {
+              return Response.json({ error: "Missing authorization token" }, { status: 401 });
+            }
+
             const userInfo = await this.authManager.verifyToken(token);
-            if (!token || !userInfo) {
-              return Response.json({ error: "Invalid or missing authorization token" }, { status: 401 });
+            if (!userInfo) {
+              return Response.json({ error: "Invalid authorization token" }, { status: 401 });
             }
 
             if (!this.machinePool) {
@@ -236,9 +240,14 @@ export class ContainerServer {
         "/api/machine/:id": {
           GET: corsMiddleware(async (req: Request) => {
             const token = this.authManager.extractTokenFromHeader(req.headers.get("authorization"));
+
+            if (!token) {
+              return Response.json({ error: "Missing authorization token" }, { status: 401 });
+            }
+
             const userInfo = await this.authManager.verifyToken(token);
-            if (!token || !userInfo) {
-              return Response.json({ error: "Invalid or missing authorization token" }, { status: 401 });
+            if (!userInfo) {
+              return Response.json({ error: "Invalid authorization token" }, { status: 401 });
             }
 
             const machineId = (req as any).params.id;
