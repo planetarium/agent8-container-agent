@@ -144,20 +144,29 @@ export class ContainerServer {
       imageRef: process.env.FLY_IMAGE_REF || '',
     });
 
-    // Initialize machine pool only from pool
     this.flyClientPromise.then(flyClient => {
       this.machinePool = new MachinePool(flyClient, {
-        defaultPoolSize: 10,  // 최대 3개의 머신
-        checkInterval: 60000  // 1분마다 체크
+        targetBufferSize: parseInt(process.env.MACHINE_POOL_TARGET_SIZE || '3'),
+        maxCreationBatch: parseInt(process.env.MACHINE_POOL_MAX_BATCH || '2'),
+        initialBufferSize: parseInt(process.env.MACHINE_POOL_INITIAL_SIZE || '2'),
       });
+
+      if (process.env.FLY_PROCESS_GROUP !== 'worker') {
+        // Initial warmup after server startup
+        globalThis.setTimeout(() => {
+          this.warmupPool().catch((error: Error) => {
+            console.error('[Warmup] Failed:', error);
+          });
+        }, 10000); // 10 seconds after startup
+      }
     });
 
     this.portScanner.start().then(() => {
-      console.log('스캐너가 시작되었습니다.');
+      console.log('Port scanner started successfully.');
     });
 
     this.portScanner.on('portAdded', (event: CandidatePort) => {
-      console.log("🔓 포트가 열렸습니다!" + event.port);
+      console.log("🔓 Port opened: " + event.port);
       const url = `https://${this.appName}-${this.machineId}.${this.routerDomain}`;
       const message = JSON.stringify({
         data: {
@@ -175,7 +184,7 @@ export class ContainerServer {
     });
 
     this.portScanner.on('portRemoved', (event: CandidatePort) => {
-      console.log("🔓 포트가 닫혔습니다!" + event.port);
+      console.log("🔓 Port closed: " + event.port);
       const url = `https://${this.appName}-${this.machineId}.${this.routerDomain}`;
       const message = JSON.stringify({
         data: {
@@ -205,29 +214,47 @@ export class ContainerServer {
         "/api/machine": {
           POST: corsMiddleware(async (req: Request) => {
             const token = this.authManager.extractTokenFromHeader(req.headers.get("authorization"));
+            if (!token) {
+              return Response.json({ error: "Missing authorization token" }, { status: 401 });
+            }
+
             const userInfo = await this.authManager.verifyToken(token);
-            if (!token || !userInfo) {
-              return Response.json({ error: "Invalid or missing authorization token" }, { status: 401 });
+            if (!userInfo) {
+              return Response.json({ error: "Invalid authorization token" }, { status: 401 });
             }
 
             if (!this.machinePool) {
               return Response.json({ error: "Machine pool not initialized" }, { status: 500 });
             }
 
-            // Get a machine from the pool
-            let machineId = await this.machinePool.getMachine(userInfo.userUid);
+            try {
+              console.log(`[API] Machine request from user ${userInfo.userUid}`);
 
-            // If no machine is available, create a new one and assign it
-            if (!machineId) {
-              console.info(`[Machine Pool] No available machines, creating a new one for user ${userInfo.userUid}`);
-              machineId = await this.machinePool.createNewMachineWithUser(userInfo.userUid);
+              // 1. Get a machine from the pool
+              let machineId = await this.machinePool.getMachine(userInfo.userUid);
 
+              // 2. If no machine is available, create a new one and assign it
               if (!machineId) {
-                return Response.json({ error: "Failed to create and assign new machine" }, { status: 503 });
-              }
-            }
+                console.info(`[API] No available machines, creating new one for user ${userInfo.userUid}`);
+                machineId = await this.machinePool.createNewMachineWithUser(userInfo.userUid);
 
-            return Response.json({ machine_id: machineId });
+                if (!machineId) {
+                  return Response.json({ error: "Failed to create and assign new machine" }, { status: 503 });
+                }
+              }
+
+              // 3. Background replenishment (non-blocking)
+              this.machinePool.scheduleReplenishIfNeeded().catch((error: Error) => {
+                console.error('[API] Background replenish failed:', error);
+              });
+
+              console.log(`[API] Successfully provided machine ${machineId} to user ${userInfo.userUid}`);
+              return Response.json({ machine_id: machineId });
+
+            } catch (error) {
+              console.error(`[API] Error in machine allocation for user ${userInfo.userUid}:`, error);
+              return Response.json({ error: "Internal server error" }, { status: 500 });
+            }
           }),
           OPTIONS: corsMiddleware((req: Request) => {
             return new Response(null, { status: 204 });
@@ -236,9 +263,14 @@ export class ContainerServer {
         "/api/machine/:id": {
           GET: corsMiddleware(async (req: Request) => {
             const token = this.authManager.extractTokenFromHeader(req.headers.get("authorization"));
+
+            if (!token) {
+              return Response.json({ error: "Missing authorization token" }, { status: 401 });
+            }
+
             const userInfo = await this.authManager.verifyToken(token);
-            if (!token || !userInfo) {
-              return Response.json({ error: "Invalid or missing authorization token" }, { status: 401 });
+            if (!userInfo) {
+              return Response.json({ error: "Invalid authorization token" }, { status: 401 });
             }
 
             const machineId = (req as any).params.id;
@@ -284,15 +316,92 @@ export class ContainerServer {
           GET: corsMiddleware(async (req: Request) => {
             const host = req.headers.get("host");
             const querySuccess = await Promise.race([
-              (await this.flyClientPromise).listMachines(),
-              setTimeout(1000),
+              (await this.flyClientPromise).listFlyMachines(),
+              new Promise(resolve => globalThis.setTimeout(resolve, 1000)),
             ])
               .then(() => true)
               .catch(() => false);
+
             return Response.json({
               success: querySuccess,
               host,
             });
+          })
+        },
+        "/api/pool/status": {
+          GET: corsMiddleware(async (req: Request) => {
+            if (!this.machinePool) {
+              return Response.json({ error: "Machine pool not initialized" }, { status: 503 });
+            }
+
+            try {
+              const availableCount = await this.machinePool.getAvailableCount();
+              const poolConfig = this.machinePool.getPoolConfig();
+              const machines = await this.machinePool.listMachines();
+
+              return Response.json({
+                available: availableCount,
+                total: machines.length,
+                config: poolConfig,
+                machines: machines.map(m => ({
+                  id: m.machine_id,
+                  available: m.is_available,
+                  assigned_to: m.assigned_to,
+                  created_at: m.created_at,
+                })),
+              });
+            } catch (error) {
+              console.error('[Pool Status] Error:', error);
+              return Response.json({ error: "Failed to get pool status" }, { status: 500 });
+            }
+          })
+        },
+        "/api/pool/cleanup": {
+          POST: corsMiddleware(async (req: Request) => {
+            if (!this.machinePool) {
+              return Response.json({ error: "Machine pool not initialized" }, { status: 503 });
+            }
+
+            try {
+              console.log('[API] Manual cleanup requested');
+              await this.machinePool.cleanupOrphanedMachines();
+              return Response.json({ success: true, message: "Cleanup completed" });
+            } catch (error) {
+              console.error('[Pool Cleanup] Error:', error);
+              return Response.json({ error: "Failed to cleanup pool" }, { status: 500 });
+            }
+          })
+        },
+        "/api/pool/destroy/:machineId": {
+          DELETE: corsMiddleware(async (req: Request) => {
+            if (!this.machinePool) {
+              return Response.json({ error: "Machine pool not initialized" }, { status: 503 });
+            }
+
+            const machineId = (req as any).params.machineId;
+            if (!machineId) {
+              return Response.json({ error: "Machine ID is required" }, { status: 400 });
+            }
+
+            try {
+              console.log(`[API] Manual destroy requested for machine ${machineId}`);
+              const destroyed = await this.machinePool.destroyUnusedMachine(machineId);
+
+              if (destroyed) {
+                return Response.json({
+                  success: true,
+                  message: `Machine ${machineId} destroyed successfully`
+                });
+              } else {
+                return Response.json({
+                  success: false,
+                  message: `Machine ${machineId} is assigned or not found`
+                }, { status: 400 });
+              }
+            } catch (error) {
+              console.error(`[Pool Destroy] Error destroying machine ${machineId}:`, error);
+              return Response.json({ error: "Failed to destroy machine" }, { status: 500 });
+            }
           })
         }
       },
@@ -863,11 +972,11 @@ export class ContainerServer {
       // Only destroy if machine is not available (has been used)
       if (!machine.is_available) {
         try {
-          const flyClient = await this.flyClientPromise;
-          await flyClient.destroyMachine(this.machineId);
-          console.info(`[Self-destruction] Machine ${this.machineId} has been destroyed in Fly`);
+          // Use MachinePool's destroyMachine method (updates both Fly and DB)
+          await this.machinePool?.destroyMachine(this.machineId);
+          console.info(`[Self-destruction] Machine ${this.machineId} destroyed in both Fly and DB`);
         } catch (error) {
-          console.error(`[Self-destruction] Failed to destroy machine ${this.machineId} in Fly:`, error);
+          console.error(`[Self-destruction] Failed to destroy machine ${this.machineId}:`, error);
         }
       } else {
         console.info(`[Self-destruction] Machine ${this.machineId} is still available, skipping destruction`);
@@ -1140,6 +1249,29 @@ export class ContainerServer {
     this.clientWatchers.clear();
     this.processClients.clear();
   }
+
+  /**
+   * Initial warmup of the machine pool
+   */
+  private async warmupPool(): Promise<void> {
+    if (!this.machinePool) return;
+
+    console.log('[Warmup] Starting initial pool warmup');
+
+    try {
+      const availableCount = await this.machinePool.getAvailableCount();
+      const targetBuffer = this.machinePool.getInitialBufferSize();
+
+      if (availableCount < targetBuffer) {
+        console.log(`[Warmup] Current: ${availableCount}, Target: ${targetBuffer}`);
+        await this.machinePool.scheduleReplenishIfNeeded();
+      } else {
+        console.log(`[Warmup] Pool already sufficient (${availableCount}/${targetBuffer})`);
+      }
+    } catch (error) {
+      console.error('[Warmup] Error during warmup:', error);
+    }
+  }
 }
 
 export function ensureSafePath(workdir: string, userPath: string): string {
@@ -1181,10 +1313,10 @@ async function mount(mountPath: string, tree: FileSystemTree) {
 
 async function clearDirectory(dirPath: string): Promise<void> {
   const entries: Dirent[] = await readdir(dirPath, { withFileTypes: true });
-  
+
   for (const entry of entries) {
     const fullPath: string = join(dirPath, entry.name);
-    
+
     if (entry.isDirectory()) {
       // 재귀적으로 하위 디렉토리 내용 삭제 후 디렉토리 삭제
       await clearDirectory(fullPath);

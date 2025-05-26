@@ -3,111 +3,298 @@ import { PrismaClient, Prisma } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
-interface Machine {
-  machine_id: string;
-  deleted: boolean;
-  assigned_to: string | null;
-  assigned_at: Date | null;
-  ipv6: string | null;
-  is_available: boolean;
-}
-
 export class MachinePool {
   private readonly flyClient: FlyClient;
-  private readonly defaultPoolSize: number;
-  private readonly checkInterval: number;
-  private checkTimer: NodeJS.Timeout | null = null;
+  private readonly targetBufferSize: number;
+  private readonly maxCreationBatch: number;
+  private readonly initialBufferSize: number;
+
+  // Lock IDs for advisory locks
+  private static readonly REPLENISH_LOCK_ID = 100001;
+  private static readonly CREATE_LOCK_ID = 100002;
 
   constructor(
     flyClient: FlyClient,
-    options: {
-      defaultPoolSize: number;
-      checkInterval?: number; // in milliseconds
+    options?: {
+      targetBufferSize?: number;
+      maxCreationBatch?: number;
+      initialBufferSize?: number;
     }
   ) {
     this.flyClient = flyClient;
-    this.defaultPoolSize = options.defaultPoolSize;
-    this.checkInterval = options.checkInterval || 60000; // default 1 minute
+
+    // Pool size configuration with environment variable fallbacks
+    this.targetBufferSize = options?.targetBufferSize ??
+      parseInt(process.env.MACHINE_POOL_TARGET_SIZE || '3');
+
+    this.maxCreationBatch = options?.maxCreationBatch ??
+      parseInt(process.env.MACHINE_POOL_MAX_BATCH || '2');
+
+    this.initialBufferSize = options?.initialBufferSize ??
+      parseInt(process.env.MACHINE_POOL_INITIAL_SIZE || '2');
+
+    console.log(`[MachinePool] Initialized with target: ${this.targetBufferSize}, max batch: ${this.maxCreationBatch}, initial: ${this.initialBufferSize}`);
   }
 
   /**
-   * Start the machine pool management
+   * Schedule background replenishment if needed (non-blocking)
+   * Uses reservation system with new schema fields
    */
-  async start(): Promise<void> {
-    console.log('Starting pool manager...');
-    // Initial pool check
-    await this.checkPool();
-    
-    // Start periodic checks
-    this.checkTimer = setInterval(() => this.checkPool(), this.checkInterval);
-  }
+  async scheduleReplenishIfNeeded(): Promise<void> {
+    try {
+      // 1단계: 트랜잭션 기반 락으로 예약 생성
+      const reservation = await prisma.$transaction(async (tx) => {
+        const lockAcquired = await tx.$queryRaw<{ acquired: boolean }[]>`
+          SELECT pg_try_advisory_xact_lock(${MachinePool.REPLENISH_LOCK_ID}) as acquired
+        `;
 
-  /**
-   * Stop the machine pool management
-   */
-  stop(): void {
-    if (this.checkTimer) {
-      clearInterval(this.checkTimer);
-      this.checkTimer = null;
+        if (!lockAcquired[0]?.acquired) {
+          console.log('[Replenish] Another process is already replenishing, skipping');
+          return null;
+        }
+
+        // 진행 중인 예약 확인
+        const existingReservations = await tx.machine_pool.count({
+          where: {
+            status: 'reserved',
+            reservation_type: 'replenish',
+            expires_at: { gt: new Date() }
+          }
+        });
+
+        if (existingReservations > 0) {
+          console.log(`[Replenish] ${existingReservations} reservations already pending, skipping`);
+          return null;
+        }
+
+        // 실제 사용 가능한 머신 수 확인 (예약 중인 것 제외)
+        const currentAvailable = await tx.machine_pool.count({
+          where: {
+            status: 'active',
+            is_available: true,
+            deleted: false,
+            assigned_to: null,
+          }
+        });
+
+        if (currentAvailable >= this.targetBufferSize) {
+          console.log(`[Replenish] Buffer sufficient (${currentAvailable}/${this.targetBufferSize})`);
+          return null;
+        }
+
+        const toCreate = Math.min(
+          this.targetBufferSize - currentAvailable,
+          this.maxCreationBatch
+        );
+
+        // 예약 슬롯 생성
+        const reservationId = `replenish-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10분 후 만료
+
+        const reservationSlots = [];
+        for (let i = 0; i < toCreate; i++) {
+          const slot = await tx.machine_pool.create({
+            data: {
+              machine_id: `placeholder-${reservationId}-${i}`,
+              status: 'reserved',
+              reservation_id: reservationId,
+              reservation_type: 'replenish',
+              expires_at: expiresAt,
+              is_available: false,
+              deleted: false,
+            }
+          });
+          reservationSlots.push(slot.id);
+        }
+
+        console.log(`[Replenish] Created ${toCreate} reservation slots with ID ${reservationId}`);
+        return { reservationId, toCreate, slotIds: reservationSlots };
+      });
+
+      if (!reservation) return;
+
+      // 2단계: 트랜잭션 외부에서 실제 머신 생성
+      try {
+        console.log(`[Replenish] Creating ${reservation.toCreate} machines for reservation ${reservation.reservationId}`);
+
+        const machines = await this.createMachinesViaFlyAPI(reservation.toCreate);
+
+        // 3단계: 예약된 슬롯을 실제 머신으로 교체
+        await this.replaceReservationsWithMachines(reservation.reservationId, machines);
+
+        console.log(`[Replenish] Successfully completed replenishment for reservation ${reservation.reservationId}`);
+
+      } catch (error) {
+        console.error(`[Replenish] Failed to create machines for reservation ${reservation.reservationId}:`, error);
+
+        // 실패 시 예약 슬롯 정리
+        await this.cleanupFailedReservation(reservation.reservationId);
+        throw error;
+      }
+
+    } catch (error) {
+      console.error('[Replenish] Error during replenishment:', error);
     }
   }
 
   /**
-   * Check and maintain the machine pool
+   * Perform actual replenishment work
    */
-  private async checkPool(): Promise<void> {
-    try {
-      // 1. 실제 머신 상태 조회 (Fly API)
-      const flyMachines = await this.flyClient.listFlyMachines();
-      const flyMachineIds = new Set(flyMachines.map((m: any) => m.id));
+  private async performReplenishment(): Promise<void> {
+    // Double-checked locking: verify state after acquiring lock
+    const currentAvailable = await this.getAvailableCount();
 
-      // 2. DB 상태 조회 및 동기화 (트랜잭션 범위 축소)
-      const dbMachines = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-        // DB에서 머신 목록 조회
-        const machines = await tx.machine_pool.findMany({
-          where: { deleted: false },
-        });
-        const dbMachineIds = new Set(machines.map((m: { machine_id: string }) => m.machine_id));
-        // 3. DB에는 있는데 실제로 없는 머신 → soft delete
-        const machinesToDelete = machines.filter((m: { machine_id: string }) => !flyMachineIds.has(m.machine_id));
-        if (machinesToDelete.length > 0) {
-          await tx.machine_pool.updateMany({
-            where: {
-              machine_id: { in: machinesToDelete.map((m: { machine_id: string }) => m.machine_id) }
-            },
-            data: { deleted: true }
-          });
-        }
-        // 4. 실제로는 있는데 DB에 없는 머신 → DB에 추가
-        const machinesToAdd = flyMachines.filter((m: { id: string }) => !dbMachineIds.has(m.id));
-        if (machinesToAdd.length > 0) {
-          await tx.machine_pool.createMany({
-            data: machinesToAdd.map((m: { id: string; private_ip?: string; created_at?: string }) => ({
-              machine_id: m.id,
-              ipv6: m.private_ip || '',
+    if (currentAvailable >= this.targetBufferSize) {
+      console.log(`[Replenish] Buffer sufficient (${currentAvailable}/${this.targetBufferSize})`);
+      return;
+    }
+
+    const toCreate = Math.min(
+      this.targetBufferSize - currentAvailable,
+      this.maxCreationBatch
+    );
+
+    console.info(`[Replenish] Creating ${toCreate} machines (current: ${currentAvailable}, target: ${this.targetBufferSize})`);
+
+    try {
+      await this.createNewMachines(toCreate);
+      console.info(`[Replenish] Successfully completed replenishment`);
+    } catch (error) {
+      console.error('[Replenish] Failed to create machines:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Create new machines for the pool (protected by session lock)
+   */
+  private async createNewMachines(count: number): Promise<void> {
+    if (count <= 0) return;
+
+    try {
+      // 1. Create machines via Fly API
+      console.log(`[Create] Starting creation of ${count} machines`);
+
+      const optionsList = await Promise.all(
+        Array.from({ length: count }, () => this.getMachineCreationOptions())
+      );
+
+      const machines = await Promise.all(
+        optionsList.map(async (opt, index) => {
+          try {
+            console.log(`[Create] Creating machine ${index + 1}/${count}`);
+            return await this.flyClient.createMachine(opt, 0);
+          } catch (error) {
+            console.error(`[Create] Failed to create machine ${index + 1}:`, error);
+            return null;
+          }
+        })
+      );
+
+      const validMachines = machines.filter(m => m && m.id);
+      console.log(`[Create] Successfully created ${validMachines.length}/${count} machines via Fly API`);
+
+      if (validMachines.length === 0) {
+        console.warn('[Create] No valid machines created');
+        return;
+      }
+
+      // 2. Save to database with UPSERT to prevent duplicates
+      await this.saveMachinesToDB(validMachines);
+
+    } catch (error) {
+      console.error('[Create] Error in createNewMachines:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Save machines to database using UPSERT pattern
+   */
+  private async saveMachinesToDB(machines: any[]): Promise<void> {
+    console.log(`[DB] Saving ${machines.length} machines to database`);
+
+    await prisma.$transaction(async (tx) => {
+      let savedCount = 0;
+
+      for (const machine of machines) {
+        try {
+          await tx.machine_pool.upsert({
+            where: { machine_id: machine.id },
+            update: {
               deleted: false,
               is_available: true,
-              created_at: new Date(m.created_at || Date.now()),
-            }))
+              ipv6: machine.private_ip || '',
+            },
+            create: {
+              machine_id: machine.id,
+              ipv6: machine.private_ip || '',
+              deleted: false,
+              is_available: true,
+              created_at: new Date(machine.created_at || Date.now()),
+            }
           });
+          savedCount++;
+        } catch (error) {
+          console.error(`[DB] Failed to save machine ${machine.id}:`, error);
+          // Individual machine failure doesn't stop the whole batch
         }
-        return machines;
+      }
+
+      console.log(`[DB] Successfully saved ${savedCount}/${machines.length} machines`);
+    });
+  }
+
+  /**
+   * Create a new machine and assign it to a user immediately
+   */
+  async createNewMachineWithUser(userId: string): Promise<string | null> {
+    try {
+      // Acquire blocking lock for sequential processing
+      await prisma.$executeRaw`SELECT pg_advisory_lock(${MachinePool.CREATE_LOCK_ID})`;
+
+      console.log(`[UserCreate] Lock acquired for user ${userId}`);
+
+      const options = await this.getMachineCreationOptions();
+      const machine = await this.flyClient.createMachine(options, 0);
+
+      if (!machine || !machine.id) {
+        console.error('[UserCreate] Failed to create machine via Fly API');
+        return null;
+      }
+
+      console.log(`[UserCreate] Created machine ${machine.id} for user ${userId}`);
+
+      // Save to DB and assign to user
+      const result = await prisma.$transaction(async (tx) => {
+        const created = await tx.machine_pool.create({
+          data: {
+            machine_id: machine.id,
+            ipv6: machine.private_ip || '',
+            deleted: false,
+            is_available: false,
+            assigned_to: userId,
+            assigned_at: new Date(),
+            created_at: new Date(machine.created_at || Date.now()),
+          }
+        });
+        return created.machine_id;
       });
 
-      // 5. 사용 가능한 머신만 카운트해서 풀 사이즈 유지 (트랜잭션 밖)
-      const availableCount = await prisma.machine_pool.count({
-        where: {
-          is_available: true,
-          deleted: false,
-          assigned_to: null,
-        }
-      });
-      if (availableCount < this.defaultPoolSize) {
-        const toCreate = this.defaultPoolSize - availableCount;
-        await this.createNewMachines(toCreate);
-      }
+      console.log(`[UserCreate] Successfully assigned machine ${result} to user ${userId}`);
+      return result;
+
     } catch (error) {
-      console.error('Error checking machine pool:', error);
+      console.error(`[UserCreate] Error creating machine for user ${userId}:`, error);
+      return null;
+    } finally {
+      // Release lock
+      try {
+        await prisma.$executeRaw`SELECT pg_advisory_unlock(${MachinePool.CREATE_LOCK_ID})`;
+        console.log(`[UserCreate] Lock released for user ${userId}`);
+      } catch (unlockError) {
+        console.error('[UserCreate] Failed to release lock:', unlockError);
+      }
     }
   }
 
@@ -134,7 +321,7 @@ export class MachinePool {
       memory_mb: number;
     };
   }> {
-    const image = await this.flyClient.getImageRef();
+    const image = this.flyClient.getImageRef();
     if (!image) {
       throw new Error('Failed to get image reference');
     }
@@ -167,73 +354,7 @@ export class MachinePool {
   }
 
   /**
-   * Create multiple new machines in parallel and add them to the pool
-   */
-  private async createNewMachines(count: number): Promise<void> {
-    try {
-      const optionsList = await Promise.all(
-        Array.from({ length: count }, () => this.getMachineCreationOptions())
-      );
-
-      // Fly API에 병렬로 머신 생성 요청
-      const machines = await Promise.all(optionsList.map(opt => this.flyClient.createMachine(opt, 0)));
-      const validMachines = machines.filter(m => m && m.id);
-      if (validMachines.length > 0) {
-        // DB에 한꺼번에 저장 (항상 트랜잭션 사용)
-        await prisma.$transaction(async (tx) => {
-          await tx.machine_pool.createMany({
-            data: validMachines.map((m: any) => ({
-              machine_id: m.id,
-              ipv6: m.private_ip || '',
-              deleted: false,
-              is_available: true,
-              created_at: new Date(m.created_at || Date.now()),
-            }))
-          });
-        });
-      }
-    } catch (error) {
-      console.error('Error creating new machines:', error);
-    }
-  }
-
-  /**
-   * Create a new machine and assign it to a user in a single transaction
-   */
-  async createNewMachineWithUser(userId: string): Promise<string | null> {
-    try {
-      const options = await this.getMachineCreationOptions();
-      const machine = await this.flyClient.createMachine(options, 0);
-      if (!machine || !machine.id) {
-        console.error('Failed to create new machine');
-        return null;
-      }
-
-      // Create and assign machine in a single transaction
-      const result = await prisma.$transaction(async (tx) => {
-        const created = await tx.machine_pool.create({
-          data: {
-            machine_id: machine.id,
-            ipv6: machine.private_ip || '',
-            deleted: false,
-            is_available: false,
-            assigned_to: userId,
-            assigned_at: new Date(),
-            created_at: new Date(machine.created_at || Date.now()),
-          }
-        });
-        return created.machine_id;
-      });
-
-      return result;
-    } catch (error) {
-      console.error('Error creating and assigning new machine:', error);
-      return null;
-    }
-  }
-
-  /**
-   * Get an available machine from the pool
+   * Get an available machine from the pool and assign to user
    */
   async getMachine(userId: string): Promise<string | null> {
     try {
@@ -257,16 +378,57 @@ export class MachinePool {
         `;
 
         if (!result || !Array.isArray(result) || result.length === 0) {
-          console.log('No available machines in the pool');
+          console.log(`[GetMachine] No available machines for user ${userId}`);
           return null;
         }
 
-        return result[0].machine_id;
+        const machineId = result[0].machine_id;
+        console.log(`[GetMachine] Assigned machine ${machineId} to user ${userId}`);
+        return machineId;
       });
     } catch (error) {
-      console.error('Error getting machine from pool:', error);
+      console.error(`[GetMachine] Error getting machine for user ${userId}:`, error);
       return null;
     }
+  }
+
+  /**
+   * Get the count of available machines (excluding reservations)
+   */
+  async getAvailableCount(): Promise<number> {
+    const count = await prisma.machine_pool.count({
+      where: {
+        status: 'active',
+        is_available: true,
+        deleted: false,
+        assigned_to: null,
+      }
+    });
+
+    console.log(`[Count] Available machines: ${count}`);
+    return count;
+  }
+
+  /**
+   * Get the initial buffer size for warmup
+   */
+  getInitialBufferSize(): number {
+    return this.initialBufferSize;
+  }
+
+  /**
+   * Get current pool configuration
+   */
+  getPoolConfig(): {
+    targetBufferSize: number;
+    maxCreationBatch: number;
+    initialBufferSize: number;
+  } {
+    return {
+      targetBufferSize: this.targetBufferSize,
+      maxCreationBatch: this.maxCreationBatch,
+      initialBufferSize: this.initialBufferSize,
+    };
   }
 
   /**
@@ -302,7 +464,7 @@ export class MachinePool {
   }
 
   /**
-   * Returns all non-deleted machines from the database.
+   * Returns all non-deleted machines from the database
    */
   async listMachines(): Promise<{
     machine_id: string;
@@ -321,7 +483,7 @@ export class MachinePool {
   }
 
   /**
-   * Returns a single machine by machine_id from the database (if not deleted).
+   * Returns a single machine by machine_id from the database (if not deleted)
    */
   async getMachineById(machineId: string): Promise<{
     machine_id: string;
@@ -340,7 +502,7 @@ export class MachinePool {
   }
 
   /**
-   * Gets the IP address of a machine.
+   * Gets the IP address of a machine
    * @param machineId - ID of the machine
    * @returns The machine's IP address or null if not found
    */
@@ -379,6 +541,221 @@ export class MachinePool {
     } catch (error) {
       console.error('Error soft deleting machine:', error);
       return false;
+    }
+  }
+
+  /**
+   * Destroy a machine both in Fly and DB
+   */
+  async destroyMachine(machineId: string): Promise<boolean> {
+    try {
+      console.log(`[Destroy] Starting destruction of machine ${machineId}`);
+
+      // 1. Mark as deleted in DB first (before destroying in Fly)
+      const updated = await prisma.machine_pool.updateMany({
+        where: {
+          machine_id: machineId,
+          deleted: false
+        },
+        data: { deleted: true }
+      });
+
+      if (updated.count > 0) {
+        console.log(`[Destroy] Machine ${machineId} marked as deleted in DB`);
+      } else {
+        console.warn(`[Destroy] Machine ${machineId} not found in DB or already deleted`);
+      }
+
+      // 2. Delete from Fly API (after DB update)
+      await this.flyClient.destroyMachine(machineId);
+      console.log(`[Destroy] Machine ${machineId} destroyed in Fly`);
+
+      return updated.count > 0;
+
+    } catch (error) {
+      console.error(`[Destroy] Error destroying machine ${machineId}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Destroy machine only if it's not assigned (safe cleanup)
+   */
+  async destroyUnusedMachine(machineId: string): Promise<boolean> {
+    try {
+      const result = await prisma.$transaction(async (tx) => {
+        // Only delete unassigned machines
+        const machine = await tx.machine_pool.findFirst({
+          where: {
+            machine_id: machineId,
+            deleted: false,
+            assigned_to: null,
+            is_available: true
+          }
+        });
+
+        if (!machine) {
+          console.log(`[SafeDestroy] Machine ${machineId} is assigned or not found, skipping`);
+          return false;
+        }
+
+        // Mark as deleted in DB first
+        await tx.machine_pool.update({
+          where: { id: machine.id },
+          data: { deleted: true }
+        });
+
+        // Delete from Fly (after DB update)
+        await this.flyClient.destroyMachine(machineId);
+
+        return true;
+      });
+
+      if (result) {
+        console.log(`[SafeDestroy] Successfully destroyed unused machine ${machineId}`);
+      }
+
+      return result;
+    } catch (error) {
+      console.error(`[SafeDestroy] Error destroying unused machine ${machineId}:`, error);
+      return false;
+    }
+  }
+
+  /**
+   * Clean up orphaned machines (optional cleanup method)
+   */
+  async cleanupOrphanedMachines(): Promise<void> {
+    try {
+      console.log('[Cleanup] Starting orphaned machine cleanup');
+
+      // Get actual machines from Fly API
+      const flyMachines = await this.flyClient.listFlyMachines();
+      const flyMachineIds = new Set(flyMachines.map((m: any) => m.id));
+
+      // Find machines in DB that don't exist in Fly
+      const orphanedMachines = await prisma.machine_pool.findMany({
+        where: {
+          deleted: false,
+          machine_id: {
+            notIn: Array.from(flyMachineIds)
+          }
+        }
+      });
+
+      if (orphanedMachines.length > 0) {
+        await prisma.machine_pool.updateMany({
+          where: {
+            machine_id: { in: orphanedMachines.map(m => m.machine_id) }
+          },
+          data: { deleted: true }
+        });
+
+        console.log(`[Cleanup] Marked ${orphanedMachines.length} orphaned machines as deleted`);
+      } else {
+        console.log('[Cleanup] No orphaned machines found');
+      }
+    } catch (error) {
+      console.error('[Cleanup] Error during cleanup:', error);
+    }
+  }
+
+  /**
+   * Create machines via Fly API only (separated from DB operations)
+   */
+  private async createMachinesViaFlyAPI(count: number): Promise<any[]> {
+    if (count <= 0) return [];
+
+    console.log(`[FlyAPI] Creating ${count} machines via Fly API`);
+
+    const optionsList = await Promise.all(
+      Array.from({ length: count }, () => this.getMachineCreationOptions())
+    );
+
+    const machines = await Promise.all(
+      optionsList.map(async (opt, index) => {
+        try {
+          console.log(`[FlyAPI] Creating machine ${index + 1}/${count}`);
+          return await this.flyClient.createMachine(opt, 0);
+        } catch (error) {
+          console.error(`[FlyAPI] Failed to create machine ${index + 1}:`, error);
+          return null;
+        }
+      })
+    );
+
+    const validMachines = machines.filter(m => m && m.id);
+    console.log(`[FlyAPI] Successfully created ${validMachines.length}/${count} machines`);
+
+    return validMachines;
+  }
+
+  /**
+   * Replace reservation slots with actual machines
+   */
+  private async replaceReservationsWithMachines(reservationId: string, machines: any[]): Promise<void> {
+    await prisma.$transaction(async (tx) => {
+      // Get reservation slots
+      const reservationSlots = await tx.machine_pool.findMany({
+        where: {
+          reservation_id: reservationId,
+          status: 'reserved'
+        },
+        orderBy: { id: 'asc' }
+      });
+
+      console.log(`[Replace] Found ${reservationSlots.length} reservation slots for ${machines.length} machines`);
+
+      // Replace slots with actual machines
+      for (let i = 0; i < Math.min(reservationSlots.length, machines.length); i++) {
+        const slot = reservationSlots[i];
+        const machine = machines[i];
+
+        await tx.machine_pool.update({
+          where: { id: slot.id },
+          data: {
+            machine_id: machine.id,
+            status: 'active',
+            ipv6: machine.private_ip || '',
+            is_available: true,
+            reservation_id: null,
+            reservation_type: null,
+            expires_at: null,
+            created_at: new Date(machine.created_at || Date.now()),
+          }
+        });
+
+        console.log(`[Replace] Replaced slot ${slot.id} with machine ${machine.id}`);
+      }
+
+      // Remove excess reservation slots if any
+      if (reservationSlots.length > machines.length) {
+        const excessSlots = reservationSlots.slice(machines.length);
+        await tx.machine_pool.deleteMany({
+          where: {
+            id: { in: excessSlots.map(s => s.id) }
+          }
+        });
+        console.log(`[Replace] Removed ${excessSlots.length} excess reservation slots`);
+      }
+    });
+  }
+
+  /**
+   * Clean up failed reservation slots
+   */
+  private async cleanupFailedReservation(reservationId: string): Promise<void> {
+    try {
+      const deleted = await prisma.machine_pool.deleteMany({
+        where: {
+          reservation_id: reservationId,
+          status: 'reserved'
+        }
+      });
+
+      console.log(`[Cleanup] Removed ${deleted.count} failed reservation slots for ${reservationId}`);
+    } catch (error) {
+      console.error(`[Cleanup] Failed to clean up reservation ${reservationId}:`, error);
     }
   }
 }
