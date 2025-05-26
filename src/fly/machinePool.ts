@@ -478,6 +478,84 @@ export class MachinePool {
   }
 
   /**
+   * Destroy a machine both in Fly and DB
+   */
+  async destroyMachine(machineId: string): Promise<boolean> {
+    try {
+      console.log(`[Destroy] Starting destruction of machine ${machineId}`);
+
+      // 1. Mark as deleted in DB first (before destroying in Fly)
+      const updated = await prisma.machine_pool.updateMany({
+        where: {
+          machine_id: machineId,
+          deleted: false
+        },
+        data: { deleted: true }
+      });
+
+      if (updated.count > 0) {
+        console.log(`[Destroy] Machine ${machineId} marked as deleted in DB`);
+      } else {
+        console.warn(`[Destroy] Machine ${machineId} not found in DB or already deleted`);
+      }
+
+      // 2. Delete from Fly API (after DB update)
+      await this.flyClient.destroyMachine(machineId);
+      console.log(`[Destroy] Machine ${machineId} destroyed in Fly`);
+
+      return updated.count > 0;
+
+    } catch (error) {
+      console.error(`[Destroy] Error destroying machine ${machineId}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Destroy machine only if it's not assigned (safe cleanup)
+   */
+  async destroyUnusedMachine(machineId: string): Promise<boolean> {
+    try {
+      const result = await prisma.$transaction(async (tx) => {
+        // Only delete unassigned machines
+        const machine = await tx.machine_pool.findFirst({
+          where: {
+            machine_id: machineId,
+            deleted: false,
+            assigned_to: null,
+            is_available: true
+          }
+        });
+
+        if (!machine) {
+          console.log(`[SafeDestroy] Machine ${machineId} is assigned or not found, skipping`);
+          return false;
+        }
+
+        // Mark as deleted in DB first
+        await tx.machine_pool.update({
+          where: { id: machine.id },
+          data: { deleted: true }
+        });
+
+        // Delete from Fly (after DB update)
+        await this.flyClient.destroyMachine(machineId);
+
+        return true;
+      });
+
+      if (result) {
+        console.log(`[SafeDestroy] Successfully destroyed unused machine ${machineId}`);
+      }
+
+      return result;
+    } catch (error) {
+      console.error(`[SafeDestroy] Error destroying unused machine ${machineId}:`, error);
+      return false;
+    }
+  }
+
+  /**
    * Clean up orphaned machines (optional cleanup method)
    */
   async cleanupOrphanedMachines(): Promise<void> {

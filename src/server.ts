@@ -144,7 +144,6 @@ export class ContainerServer {
       imageRef: process.env.FLY_IMAGE_REF || '',
     });
 
-    // Initialize machine pool (simplified - no scheduler needed)
     this.flyClientPromise.then(flyClient => {
       this.machinePool = new MachinePool(flyClient, {
         targetBufferSize: parseInt(process.env.MACHINE_POOL_TARGET_SIZE || '3'),
@@ -152,12 +151,14 @@ export class ContainerServer {
         initialBufferSize: parseInt(process.env.MACHINE_POOL_INITIAL_SIZE || '2'),
       });
 
-      // Initial warmup after server startup
-      globalThis.setTimeout(() => {
-        this.warmupPool().catch((error: Error) => {
-          console.error('[Warmup] Failed:', error);
-        });
-      }, 10000); // 10 seconds after startup
+      if (process.env.FLY_PROCESS_GROUP !== 'worker') {
+        // Initial warmup after server startup
+        globalThis.setTimeout(() => {
+          this.warmupPool().catch((error: Error) => {
+            console.error('[Warmup] Failed:', error);
+          });
+        }, 10000); // 10 seconds after startup
+      }
     });
 
     this.portScanner.start().then(() => {
@@ -321,13 +322,6 @@ export class ContainerServer {
               .then(() => true)
               .catch(() => false);
 
-            // Optional cleanup during health checks (non-blocking)
-            if (querySuccess && this.machinePool) {
-              this.machinePool.cleanupOrphanedMachines().catch((error: Error) => {
-                console.error('[Health] Cleanup failed:', error);
-              });
-            }
-
             return Response.json({
               success: querySuccess,
               host,
@@ -359,6 +353,54 @@ export class ContainerServer {
             } catch (error) {
               console.error('[Pool Status] Error:', error);
               return Response.json({ error: "Failed to get pool status" }, { status: 500 });
+            }
+          })
+        },
+        "/api/pool/cleanup": {
+          POST: corsMiddleware(async (req: Request) => {
+            if (!this.machinePool) {
+              return Response.json({ error: "Machine pool not initialized" }, { status: 503 });
+            }
+
+            try {
+              console.log('[API] Manual cleanup requested');
+              await this.machinePool.cleanupOrphanedMachines();
+              return Response.json({ success: true, message: "Cleanup completed" });
+            } catch (error) {
+              console.error('[Pool Cleanup] Error:', error);
+              return Response.json({ error: "Failed to cleanup pool" }, { status: 500 });
+            }
+          })
+        },
+        "/api/pool/destroy/:machineId": {
+          DELETE: corsMiddleware(async (req: Request) => {
+            if (!this.machinePool) {
+              return Response.json({ error: "Machine pool not initialized" }, { status: 503 });
+            }
+
+            const machineId = (req as any).params.machineId;
+            if (!machineId) {
+              return Response.json({ error: "Machine ID is required" }, { status: 400 });
+            }
+
+            try {
+              console.log(`[API] Manual destroy requested for machine ${machineId}`);
+              const destroyed = await this.machinePool.destroyUnusedMachine(machineId);
+
+              if (destroyed) {
+                return Response.json({
+                  success: true,
+                  message: `Machine ${machineId} destroyed successfully`
+                });
+              } else {
+                return Response.json({
+                  success: false,
+                  message: `Machine ${machineId} is assigned or not found`
+                }, { status: 400 });
+              }
+            } catch (error) {
+              console.error(`[Pool Destroy] Error destroying machine ${machineId}:`, error);
+              return Response.json({ error: "Failed to destroy machine" }, { status: 500 });
             }
           })
         }
@@ -930,11 +972,11 @@ export class ContainerServer {
       // Only destroy if machine is not available (has been used)
       if (!machine.is_available) {
         try {
-          const flyClient = await this.flyClientPromise;
-          await flyClient.destroyMachine(this.machineId);
-          console.info(`[Self-destruction] Machine ${this.machineId} has been destroyed in Fly`);
+          // Use MachinePool's destroyMachine method (updates both Fly and DB)
+          await this.machinePool?.destroyMachine(this.machineId);
+          console.info(`[Self-destruction] Machine ${this.machineId} destroyed in both Fly and DB`);
         } catch (error) {
-          console.error(`[Self-destruction] Failed to destroy machine ${this.machineId} in Fly:`, error);
+          console.error(`[Self-destruction] Failed to destroy machine ${this.machineId}:`, error);
         }
       } else {
         console.info(`[Self-destruction] Machine ${this.machineId} is still available, skipping destruction`);
