@@ -37,7 +37,7 @@ export class MachinePool {
     console.log('Starting pool manager...');
     // Initial pool check
     await this.checkPool();
-    
+
     // Start periodic checks
     this.checkTimer = setInterval(() => this.checkPool(), this.checkInterval);
   }

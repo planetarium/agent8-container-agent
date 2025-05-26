@@ -284,7 +284,7 @@ export class ContainerServer {
           GET: corsMiddleware(async (req: Request) => {
             const host = req.headers.get("host");
             const querySuccess = await Promise.race([
-              (await this.flyClientPromise).listMachines(),
+              (await this.flyClientPromise).listFlyMachines(),
               setTimeout(1000),
             ])
               .then(() => true)
@@ -1181,10 +1181,10 @@ async function mount(mountPath: string, tree: FileSystemTree) {
 
 async function clearDirectory(dirPath: string): Promise<void> {
   const entries: Dirent[] = await readdir(dirPath, { withFileTypes: true });
-  
+
   for (const entry of entries) {
     const fullPath: string = join(dirPath, entry.name);
-    
+
     if (entry.isDirectory()) {
       // 재귀적으로 하위 디렉토리 내용 삭제 후 디렉토리 삭제
       await clearDirectory(fullPath);
