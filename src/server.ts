@@ -108,6 +108,7 @@ export class ContainerServer {
   private readonly connectionTestInterval = 60000; // 1 minute
   private readonly machineDestroyInterval = 300000; // 5 minutes
   private machinePool: MachinePool | null = null;
+  private latestOpenPort: number | null = null;
 
   constructor(config: {
     port: number;
@@ -137,7 +138,9 @@ export class ContainerServer {
 
     this.portScanner = new PortScanner({
       scanIntervalMs: 2000,
-      enableLogging: false
+      enableLogging: false,
+      portFilter: { min: 1024, max: 65535 }, // Exclude system ports
+      excludeProcesses: ['bun'] // Exclude bun processes (including this server)
     });
 
     this.flyClientPromise = initializeFlyClient({
@@ -149,17 +152,24 @@ export class ContainerServer {
     // Initialize machine pool only from pool
     this.flyClientPromise.then(flyClient => {
       this.machinePool = new MachinePool(flyClient, {
-        defaultPoolSize: 10,  // 최대 3개의 머신
-        checkInterval: 60000  // 1분마다 체크
+        defaultPoolSize: 10,  // Maximum 10 machines
+        checkInterval: 60000  // Check every minute
       });
     });
 
     this.portScanner.start().then(() => {
-      console.log('스캐너가 시작되었습니다.');
+      console.log('Port scanner started.');
     });
 
     this.portScanner.on('portAdded', (event: CandidatePort) => {
-      console.log("🔓 포트가 열렸습니다!" + event.port);
+      // Exclude the current server port to prevent infinite proxy loops
+      if (event.port === this.config.port) {
+        console.log(`🚫 Ignoring server's own port: ${event.port}`);
+        return;
+      }
+
+      console.log("🔓 Port opened: " + event.port);
+      this.latestOpenPort = event.port;
       const url = `https://${this.appName}-${this.machineId}.${this.routerDomain}`;
       const message = JSON.stringify({
         data: {
@@ -177,7 +187,11 @@ export class ContainerServer {
     });
 
     this.portScanner.on('portRemoved', (event: CandidatePort) => {
-      console.log("🔓 포트가 닫혔습니다!" + event.port);
+      console.log("🔓 Port closed: " + event.port);
+      // If the closed port is the current latest port, reset to null
+      if (this.latestOpenPort === event.port) {
+        this.latestOpenPort = null;
+      }
       const url = `https://${this.appName}-${this.machineId}.${this.routerDomain}`;
       const message = JSON.stringify({
         data: {
@@ -310,32 +324,55 @@ export class ContainerServer {
       fetch: corsMiddleware(async (req, server) => {
         console.log('Sec-WebSocket-Protocol: ', req.headers.get("sec-websocket-protocol"));
 
-        if (req.headers.get("sec-websocket-protocol")?.startsWith("vite")) {
-          const url = new URL(req.url);
-          const targetUrl = `ws://localhost:5173${url.pathname}${url.search}`;
-          const headers = Object.fromEntries(req.headers.entries());
-
-          console.log(`Proxying WebSocket to: ${targetUrl}`);
-
-          if (server.upgrade(req, { data: { targetUrl, headers} })) {
-            return;
+        // Handle WebSocket upgrade requests
+        if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
+          if (req.headers.get("sec-websocket-protocol")?.startsWith("agent8")) {
+            // Handle direct connection for agent8 protocol
+            if (
+              server.upgrade(req, {
+                data: {
+                  wsId: Math.random().toString(36).substring(7),
+                },
+              })
+            ) {
+              return;
+            } else {
+              return new Response("Direct WebSocket upgrade failed", { status: 500 });
+            }
           } else {
-            return new Response("Proxy WebSocket upgrade failed", { status: 500 });
+            // Proxy all other WebSocket protocols to localhost
+            const url = new URL(req.url);
+
+            // Check if there's an open port available
+            if (!this.latestOpenPort) {
+              console.warn("No open ports detected yet, ignoring WebSocket proxy request");
+              return new Response("No open ports available", { status: 503 });
+            }
+
+            const targetUrl = `ws://localhost:${this.latestOpenPort}${url.pathname}${url.search}`;
+            const headers = Object.fromEntries(req.headers.entries());
+
+            console.log(`Proxying WebSocket to: ${targetUrl}`);
+
+            if (server.upgrade(req, { data: { targetUrl, headers} })) {
+              return;
+            } else {
+              return new Response("Proxy WebSocket upgrade failed", { status: 500 });
+            }
           }
-        } else if (
-          server.upgrade(req, {
-            data: {
-              wsId: Math.random().toString(36).substring(7),
-            },
-          })
-        ) {
-          return;
         }
 
-       // Proxy HTTP requests to localhost:5173 when WebSocket upgrade fails
+       // Proxy HTTP requests to localhost when WebSocket upgrade fails
       try {
         const url = new URL(req.url);
-        const targetUrl = `http://localhost:5173${url.pathname}${url.search}`;
+
+        // Check if there's an open port available
+        if (!this.latestOpenPort) {
+          console.warn("No open ports detected yet, ignoring HTTP proxy request");
+          return new Response("No open ports available", { status: 503 });
+        }
+
+        const targetUrl = `http://localhost:${this.latestOpenPort}${url.pathname}${url.search}`;
 
         console.log(`Proxying request to: ${targetUrl}`);
 
@@ -400,7 +437,7 @@ export class ContainerServer {
               }, '*');
             };
 
-            // console.error 캡처 (선택사항)
+            // Capture console.error (optional)
             const originalConsoleError = console.error;
             console.error = function() {
               originalConsoleError.apply(console, arguments);
@@ -1184,11 +1221,11 @@ async function clearDirectory(dirPath: string): Promise<void> {
     const fullPath: string = join(dirPath, entry.name);
 
     if (entry.isDirectory()) {
-      // 재귀적으로 하위 디렉토리 내용 삭제 후 디렉토리 삭제
+      // Recursively delete subdirectory contents then delete directory
       await clearDirectory(fullPath);
       await rmdir(fullPath);
     } else {
-      // 파일 삭제
+      // Delete file
       await unlink(fullPath);
     }
   }
