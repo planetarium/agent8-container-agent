@@ -138,7 +138,9 @@ export class ContainerServer {
 
     this.portScanner = new PortScanner({
       scanIntervalMs: 2000,
-      enableLogging: false
+      enableLogging: false,
+      portFilter: { min: 1024, max: 65535 }, // Exclude system ports
+      excludeProcesses: ['bun'] // Exclude bun processes (including this server)
     });
 
     this.flyClientPromise = initializeFlyClient({
@@ -160,6 +162,12 @@ export class ContainerServer {
     });
 
     this.portScanner.on('portAdded', (event: CandidatePort) => {
+      // Exclude the current server port to prevent infinite proxy loops
+      if (event.port === this.config.port) {
+        console.log(`🚫 Ignoring server's own port: ${event.port}`);
+        return;
+      }
+
       console.log("🔓 Port opened: " + event.port);
       this.latestOpenPort = event.port;
       const url = `https://${this.appName}-${this.machineId}.${this.routerDomain}`;
