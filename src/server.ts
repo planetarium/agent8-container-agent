@@ -316,33 +316,42 @@ export class ContainerServer {
       fetch: corsMiddleware(async (req, server) => {
         console.log('Sec-WebSocket-Protocol: ', req.headers.get("sec-websocket-protocol"));
 
-        if (req.headers.get("sec-websocket-protocol")?.startsWith("vite")) {
-          const url = new URL(req.url);
-
-          // Check if there's an open port available
-          if (!this.latestOpenPort) {
-            console.warn("No open ports detected yet, ignoring WebSocket proxy request");
-            return new Response("No open ports available", { status: 503 });
-          }
-
-          const targetUrl = `ws://localhost:${this.latestOpenPort}${url.pathname}${url.search}`;
-          const headers = Object.fromEntries(req.headers.entries());
-
-          console.log(`Proxying WebSocket to: ${targetUrl}`);
-
-          if (server.upgrade(req, { data: { targetUrl, headers} })) {
-            return;
+        // Handle WebSocket upgrade requests
+        if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
+          if (req.headers.get("sec-websocket-protocol")?.startsWith("agent8")) {
+            // Handle direct connection for agent8 protocol
+            if (
+              server.upgrade(req, {
+                data: {
+                  wsId: Math.random().toString(36).substring(7),
+                },
+              })
+            ) {
+              return;
+            } else {
+              return new Response("Direct WebSocket upgrade failed", { status: 500 });
+            }
           } else {
-            return new Response("Proxy WebSocket upgrade failed", { status: 500 });
+            // Proxy all other WebSocket protocols to localhost
+            const url = new URL(req.url);
+
+            // Check if there's an open port available
+            if (!this.latestOpenPort) {
+              console.warn("No open ports detected yet, ignoring WebSocket proxy request");
+              return new Response("No open ports available", { status: 503 });
+            }
+
+            const targetUrl = `ws://localhost:${this.latestOpenPort}${url.pathname}${url.search}`;
+            const headers = Object.fromEntries(req.headers.entries());
+
+            console.log(`Proxying WebSocket to: ${targetUrl}`);
+
+            if (server.upgrade(req, { data: { targetUrl, headers} })) {
+              return;
+            } else {
+              return new Response("Proxy WebSocket upgrade failed", { status: 500 });
+            }
           }
-        } else if (
-          server.upgrade(req, {
-            data: {
-              wsId: Math.random().toString(36).substring(7),
-            },
-          })
-        ) {
-          return;
         }
 
        // Proxy HTTP requests to localhost when WebSocket upgrade fails
