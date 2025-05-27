@@ -98,6 +98,7 @@ export class ContainerServer {
   private authToken: string | undefined;
   private routerDomain: string;
   private appName: string;
+  private isAssigned: boolean;
   private machineId: string;
   private flyClientPromise: Promise<FlyClient>;
   private readonly authManager: AuthManager;
@@ -128,6 +129,7 @@ export class ContainerServer {
     this.connectionLastActivityTime = new Map();
     this.routerDomain = config.routerDomain;
     this.appName = config.appName;
+    this.isAssigned = false;
     this.machineId = config.machineId;
     this.authManager = new AuthManager({
       authServerUrl: process.env.AUTH_SERVER_URL || 'https://v8-meme-api.verse8.io'
@@ -770,6 +772,7 @@ export class ContainerServer {
         const userInfo = await this.authManager.verifyToken(token);
         if (userInfo) {
           this.authToken = token;
+          this.isAssigned = true;
           return { success: true, data: null };
         }
         return {
@@ -814,6 +817,7 @@ export class ContainerServer {
       && this.config.processGroup === "worker"
       && this.machineLastActivityTime
       && now - this.machineLastActivityTime > this.machineDestroyInterval
+      && this.isAssigned
     ) {
       console.info("No active connections, releasing server");
       this.stop();
@@ -860,29 +864,14 @@ export class ContainerServer {
     // Clean up project directory
     await clearDirectory('/home/project');
 
-    // Self-destruction in DB and Fly
+    // Self-destruction in Fly
+    // Only destroy if machine is not available (has been used)
     try {
-      const machine = await this.machinePool?.getMachineById(this.machineId);
-
-      if (!machine) {
-        console.warn(`[Self-destruction] Machine ${this.machineId} not found in DB`);
-        return;
-      }
-
-      // Only destroy if machine is not available (has been used)
-      if (!machine.is_available) {
-        try {
-          const flyClient = await this.flyClientPromise;
-          await flyClient.destroyMachine(this.machineId);
-          console.info(`[Self-destruction] Machine ${this.machineId} has been destroyed in Fly`);
-        } catch (error) {
-          console.error(`[Self-destruction] Failed to destroy machine ${this.machineId} in Fly:`, error);
-        }
-      } else {
-        console.info(`[Self-destruction] Machine ${this.machineId} is still available, skipping destruction`);
-      }
+      const flyClient = await this.flyClientPromise;
+      await flyClient.destroyMachine(this.machineId);
+      console.info(`[Self-destruction] Machine ${this.machineId} has been destroyed in Fly`);
     } catch (error) {
-      console.error('[Self-destruction] Error while cleaning up machine:', error);
+      console.error(`[Self-destruction] Failed to destroy machine ${this.machineId} in Fly:`, error);
     }
   }
 
