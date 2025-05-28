@@ -1093,6 +1093,27 @@ export class ContainerServer {
       },
     });
 
+    // Add error handler for chokidar watcher
+    watcher.on("error", (error: any) => {
+      console.error(`File watcher error for watcherId ${watcherId}:`, error);
+
+      // Handle specific error types
+      if (error.code === 'EINVAL') {
+        console.warn(`EINVAL error detected for watcherId ${watcherId}. This may be due to temporary files or file system limitations.`);
+
+        // Optionally restart watcher with polling if EINVAL occurs frequently
+        if (error.path && error.path.includes('_tmp_')) {
+          console.info(`Temporary file error detected: ${error.path}. Continuing with current watcher.`);
+        }
+      } else if (error.code === 'ENOENT') {
+        console.warn(`File or directory not found for watcherId ${watcherId}: ${error.path}`);
+      } else if (error.code === 'EMFILE' || error.code === 'ENFILE') {
+        console.error(`Too many open files for watcherId ${watcherId}. Consider reducing watch scope.`);
+      } else {
+        console.error(`Unexpected watcher error for watcherId ${watcherId}:`, error);
+      }
+    });
+
     watcher.on("all", async (eventName, filePath, stats) => {
       const eventType = this.mapChokidarEvent(eventName);
       try {
