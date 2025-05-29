@@ -56,7 +56,6 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     apt-get clean
 
 # copy .zshrc
-COPY .zshrc /root/.zshrc
 
 WORKDIR /app
 
@@ -74,8 +73,7 @@ RUN bun install --production --frozen-lockfile
 
 # Set default environment variables
 ENV PORT=3000 \
-    WORKDIR_NAME=/home/project \
-    COEP=credentialless \
+    WORKDIR_NAME=/home/project \ COEP=credentialless \
     FORWARD_PREVIEW_ERRORS=true \
     NODE_ENV=development \
     PNPM_HOME=/pnpm \
@@ -87,21 +85,18 @@ COPY --from=template-builder /app/agent8-templates /app/agent8-templates
 COPY --from=template-builder /app/agent8-templates/node_modules ./node_modules
 COPY --from=template-builder /app/agent8-templates/pnpm-lock.yaml ./pnpm-lock.yaml
 
+COPY .zshrc /home/agent8/.zshrc
+
 # agent8 사용자 생성
 RUN groupadd -r -g 2000 agent8 && useradd -r -u 2000 -g agent8 -m agent8
 
 # 작업 디렉토리 생성 및 권한 설정
 RUN chown -R agent8:agent8 /home/project
+RUN chmod 777 /pnpm
+RUN chown -R agent8:agent8 /pnpm
 
-# agent8 사용자의 홈 디렉토리 제한
-RUN chmod 700 /home/agent8 && \
-    chown -R agent8:agent8 /home/agent8
-
-# /home/project 외의 디렉토리 접근 제한
-RUN chmod 750 /home && \
-    chmod 750 /home/project && \
-    chown root:root /home && \
-    chown agent8:agent8 /home/project
+# 다른 시스템 디렉토리 접근 제한
+RUN chmod 750 /proc 
 
 EXPOSE 3000
 
