@@ -957,7 +957,7 @@ export class ContainerServer {
     const childProcess = spawn('node', ptyArgs, {
       cwd: this.config.workdirName,
       stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, coep: this.config.coep, ...(env || {}) },
+      env: { coep: this.config.coep, ...(env || {}) },
       detached: true,
     });
 
