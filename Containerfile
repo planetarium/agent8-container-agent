@@ -73,7 +73,8 @@ RUN bun install --production --frozen-lockfile
 
 # Set default environment variables
 ENV PORT=3000 \
-    WORKDIR_NAME=/home/project \ COEP=credentialless \
+    WORKDIR_NAME=/home/project \
+    COEP=credentialless \
     FORWARD_PREVIEW_ERRORS=true \
     NODE_ENV=development \
     PNPM_HOME=/pnpm \
