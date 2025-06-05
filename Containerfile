@@ -33,7 +33,7 @@ RUN node merge-dependencies.js
 ENV PNPM_HOME=/pnpm \
     PNPM_STORE_DIR=/pnpm/store
 
-RUN pnpm install
+RUN pnpm update
 
 FROM oven/bun:1.2.10-slim
 
@@ -85,7 +85,6 @@ WORKDIR /home/project
 
 COPY --from=template-builder /app/agent8-templates /app/agent8-templates
 COPY --from=template-builder /app/agent8-templates/node_modules ./node_modules
-COPY --from=template-builder /app/agent8-templates/pnpm-lock.yaml ./pnpm-lock.yaml
 
 COPY .zshrc /home/agent8/.zshrc
 
