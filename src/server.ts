@@ -886,17 +886,6 @@ export class ContainerServer {
   }
 
   public async stop(): Promise<void> {
-    // Kill all processes
-    for (const [pid, process] of this.processes.entries()) {
-      process.kill();
-      this.processes.delete(pid);
-    }
-
-    this.cleanup();
-
-    // Clean up project directory
-    await clearDirectory('/home/project');
-
     // Self-destruction in DB and Fly
     try {
       const machine = await this.machinePool?.getMachineById(this.machineId);
