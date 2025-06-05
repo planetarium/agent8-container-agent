@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@prisma/client": "^6.7.0",
+    "ai": "^4.3.16",
     "chokidar": "^4.0.3",
     "dotenv": "^16.5.0",
     "eventemitter3": "^5.0.1",

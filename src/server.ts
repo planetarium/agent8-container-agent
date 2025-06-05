@@ -1,12 +1,12 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { Dirent, Stats } from "node:fs";
+import type { Dirent, Stats } from "node:fs";
 import { chown, mkdir, readFile, readdir, rm, rmdir, stat, unlink, writeFile } from "node:fs/promises";
 import { join, normalize } from "node:path";
-import { PortScanner } from "./portScanner/portScanner.ts";
 import process from "node:process";
+import { setTimeout } from "node:timers/promises";
 import type { Server, ServerWebSocket } from "bun";
 import chokidar, { type FSWatcher } from "chokidar";
-import { minimatch } from 'minimatch';
+import { minimatch } from "minimatch";
 import type {
   AuthOperation,
   BufferEncoding,
@@ -24,12 +24,14 @@ import type {
   WatchPathsOptions,
   WatchResponse,
 } from "../protocol/src/index.ts";
-import { FlyClient, initializeFlyClient } from "./fly";
-import type { DirectConnectionData, ProxyData } from "./types.ts";
-import { CandidatePort } from "./portScanner";
-import { AuthManager } from './auth';
-import { setTimeout } from "node:timers/promises";
-import { MachinePool } from './fly/machinePool';
+import { Agent8Client } from "./agent8";
+import { AuthManager } from "./auth";
+import { parseCookies } from "./cookieParser";
+import { type FlyClient, initializeFlyClient } from "./fly";
+import { MachinePool } from "./fly/machinePool";
+import type { CandidatePort } from "./portScanner";
+import { PortScanner } from "./portScanner/portScanner";
+import type { DirectConnectionData, ProxyData } from "./types";
 
 type WebSocketData = ProxyData | DirectConnectionData;
 
@@ -43,35 +45,39 @@ function isDirectConnection(data: WebSocketData): data is DirectConnectionData {
 }
 
 // CORS 미들웨어 함수
-function corsMiddleware(handler: (req: Request, server?: any) => Promise<Response | undefined> | Response | undefined) {
+function corsMiddleware(
+  handler: (req: Request, server?: any) => Promise<Response | undefined> | Response | undefined,
+) {
   return async (req: Request, server?: any) => {
     // OPTIONS 요청 처리
-    if (req.method === 'OPTIONS') {
+    if (req.method === "OPTIONS") {
       return new Response(null, {
         status: 204,
         headers: {
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-          'Access-Control-Max-Age': '86400'
-        }
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization",
+          "Access-Control-Max-Age": "86400",
+        },
       });
     }
 
     // 실제 요청 처리
     const response = await handler(req, server);
-    if (!response) return;
+    if (!response) {
+      return;
+    }
 
     // CORS 헤더 추가
     const headers = new Headers(response.headers);
-    headers.set('Access-Control-Allow-Origin', '*');
-    headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    headers.set("Access-Control-Allow-Origin", "*");
+    headers.set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
 
     return new Response(response.body, {
       status: response.status,
       statusText: response.statusText,
-      headers
+      headers,
     });
   };
 }
@@ -102,6 +108,7 @@ export class ContainerServer {
   private machineId: string;
   private flyClientPromise: Promise<FlyClient>;
   private readonly authManager: AuthManager;
+  private readonly agent8Client: Agent8Client;
   private readonly connectionLastActivityTime: Map<string, number>;
   private machineLastActivityTime: number | null = null;
   private cleanupInterval: NodeJS.Timeout | null = null;
@@ -135,52 +142,50 @@ export class ContainerServer {
     this.machineId = config.machineId;
     this.agentUid = config.agentUid;
     this.authManager = new AuthManager({
-      authServerUrl: process.env.AUTH_SERVER_URL || 'https://v8-meme-api.verse8.io'
+      authServerUrl: process.env.AUTH_SERVER_URL || "https://v8-meme-api.verse8.io",
     });
+
+    // Initialize Agent8 client with container server reference and workdir
+    this.agent8Client = new Agent8Client(this, config.workdirName);
 
     this.portScanner = new PortScanner({
       scanIntervalMs: 2000,
       enableLogging: false,
       portFilter: { min: 1024, max: 65535 }, // Exclude system ports
-      excludeProcesses: ['bun'] // Exclude bun processes (including this server)
+      excludeProcesses: ["bun"], // Exclude bun processes (including this server)
     });
 
     this.flyClientPromise = initializeFlyClient({
-      apiToken: process.env.FLY_API_TOKEN || '',
-      appName: process.env.TARGET_APP_NAME || '',
-      imageRef: process.env.FLY_IMAGE_REF || '',
+      apiToken: process.env.FLY_API_TOKEN || "",
+      appName: process.env.TARGET_APP_NAME || "",
+      imageRef: process.env.FLY_IMAGE_REF || "",
     });
 
     // Initialize machine pool only from pool
-    this.flyClientPromise.then(flyClient => {
+    this.flyClientPromise.then((flyClient) => {
       this.machinePool = new MachinePool(flyClient, {
-        defaultPoolSize: 10,  // Maximum 10 machines
-        checkInterval: 60000  // Check every minute
+        defaultPoolSize: 10, // Maximum 10 machines
+        checkInterval: 60000, // Check every minute
       });
     });
 
-    this.portScanner.start().then(() => {
-      console.log('Port scanner started.');
-    });
+    this.portScanner.start().then(() => {});
 
-    this.portScanner.on('portAdded', (event: CandidatePort) => {
+    this.portScanner.on("portAdded", (event: CandidatePort) => {
       // Exclude the current server port to prevent infinite proxy loops
       if (event.port === this.config.port) {
-        console.log(`🚫 Ignoring server's own port: ${event.port}`);
         return;
       }
-
-      console.log("🔓 Port opened: " + event.port);
       this.latestOpenPort = event.port;
       const url = `https://${this.appName}-${this.machineId}.${this.routerDomain}`;
       const message = JSON.stringify({
         data: {
           success: true,
           data: {
-            type: 'port',
-            data: { port: event.port, type: 'open', url }
-          }
-        }
+            type: "port",
+            data: { port: event.port, type: "open", url },
+          },
+        },
       });
 
       for (const socket of this.activeWs.values()) {
@@ -188,8 +193,7 @@ export class ContainerServer {
       }
     });
 
-    this.portScanner.on('portRemoved', (event: CandidatePort) => {
-      console.log("🔓 Port closed: " + event.port);
+    this.portScanner.on("portRemoved", (event: CandidatePort) => {
       // If the closed port is the current latest port, reset to null
       if (this.latestOpenPort === event.port) {
         this.latestOpenPort = null;
@@ -199,10 +203,10 @@ export class ContainerServer {
         data: {
           success: true,
           data: {
-            type: 'port',
-            data: { port: event.port, type: 'close', url }
-          }
-        }
+            type: "port",
+            data: { port: event.port, type: "close", url },
+          },
+        },
       });
 
       for (const socket of this.activeWs.values()) {
@@ -216,6 +220,14 @@ export class ContainerServer {
     if (!this.cleanupInterval) {
       this.cleanupInterval = setInterval(() => this.checkTimeouts(), this.connectionTestInterval);
     }
+
+    // Clean up old background tasks every hour
+    setInterval(
+      () => {
+        this.agent8Client.cleanupOldTasks();
+      },
+      60 * 60 * 1000,
+    );
 
     this.server = globalThis.Bun.serve({
       port: config.port,
@@ -241,19 +253,24 @@ export class ContainerServer {
 
             // If no machine is available, create a new one and assign it
             if (!machineId) {
-              console.info(`[Machine Pool] No available machines, creating a new one for user ${userInfo.userUid}`);
+              console.info(
+                `[Machine Pool] No available machines, creating a new one for user ${userInfo.userUid}`,
+              );
               machineId = await this.machinePool.createNewMachineWithUser(userInfo.userUid);
 
               if (!machineId) {
-                return Response.json({ error: "Failed to create and assign new machine" }, { status: 503 });
+                return Response.json(
+                  { error: "Failed to create and assign new machine" },
+                  { status: 503 },
+                );
               }
             }
 
             return Response.json({ machine_id: machineId });
           }),
-          OPTIONS: corsMiddleware((req: Request) => {
+          OPTIONS: corsMiddleware((_req: Request) => {
             return new Response(null, { status: 204 });
-          })
+          }),
         },
         "/api/machine/:id": {
           GET: corsMiddleware(async (req: Request) => {
@@ -280,32 +297,37 @@ export class ContainerServer {
               }
 
               // Get machine assignment information
-              const assignment = this.machinePool ? await this.machinePool.getMachineAssignment(machineId) : null;
+              const assignment = this.machinePool
+                ? await this.machinePool.getMachineAssignment(machineId)
+                : null;
 
               return Response.json({
                 success: true,
                 machine,
-                assignment
+                assignment,
               });
             } catch (error) {
               console.error("Error retrieving machine:", error);
-              return Response.json({
-                error: "Error occurred while retrieving machine",
-                details: error instanceof Error ? error.message : "Unknown error"
-              }, { status: 500 });
+              return Response.json(
+                {
+                  error: "Error occurred while retrieving machine",
+                  details: error instanceof Error ? error.message : "Unknown error",
+                },
+                { status: 500 },
+              );
             }
           }),
-          OPTIONS: corsMiddleware((req: Request) => {
+          OPTIONS: corsMiddleware((_req: Request) => {
             return new Response(null, {
               status: 204,
               headers: {
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-                'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-                'Access-Control-Max-Age': '86400'
-              }
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type, Authorization",
+                "Access-Control-Max-Age": "86400",
+              },
             });
-          })
+          }),
         },
         "/api/health": {
           GET: corsMiddleware(async (req: Request) => {
@@ -320,12 +342,113 @@ export class ContainerServer {
               success: querySuccess,
               host,
             });
-          })
-        }
+          }),
+        },
+        "/api/background-task": {
+          POST: corsMiddleware(async (req: Request) => {
+            const token = this.authManager.extractTokenFromHeader(req.headers.get("authorization"));
+            if (!token) {
+              return Response.json({ error: "Missing authorization token" }, { status: 401 });
+            }
+
+            const userInfo = await this.authManager.verifyToken(token);
+            if (!userInfo) {
+              return Response.json({ error: "Invalid authorization token" }, { status: 401 });
+            }
+
+            try {
+              const body = await req.json();
+
+              // Validate required fields
+              if (!body.targetServerUrl) {
+                return Response.json({ error: "targetServerUrl is required" }, { status: 400 });
+              }
+              if (!(body.messages && Array.isArray(body.messages)) || body.messages.length === 0) {
+                return Response.json(
+                  { error: "messages array is required and cannot be empty" },
+                  { status: 400 },
+                );
+              }
+
+              // Extract cookies from request headers and merge with body apiKeys
+              const cookieHeader = req.headers.get("cookie");
+              let cookieApiKeys = {};
+
+              if (cookieHeader) {
+                try {
+                  const cookies = parseCookies(cookieHeader);
+                  cookieApiKeys = JSON.parse(cookies.apiKeys || "{}");
+                } catch (error) {
+                  console.warn("Failed to parse apiKeys from cookies:", error);
+                }
+              }
+
+              // Merge cookie apiKeys with body apiKeys (body takes precedence)
+              const finalApiKeys = { ...cookieApiKeys, ...(body.apiKeys || {}) };
+
+              const taskId = await this.agent8Client.createTask({
+                userId: userInfo.userUid,
+                token: token,
+                targetServerUrl: body.targetServerUrl,
+                id: body.id || `req-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
+                messages: body.messages,
+                apiKeys: finalApiKeys,
+                files: body.files || {},
+                promptId: body.promptId || "agent8",
+                contextOptimization: body.contextOptimization ?? true,
+                cookies: cookieHeader || undefined,
+              });
+
+              return Response.json({
+                success: true,
+                taskId: taskId,
+                message: "Background task created successfully",
+              });
+            } catch (error) {
+              console.error("Background task creation failed:", error);
+              return Response.json(
+                {
+                  error:
+                    error instanceof Error ? error.message : "Failed to create background task",
+                },
+                { status: 500 },
+              );
+            }
+          }),
+          OPTIONS: corsMiddleware((_req: Request) => {
+            return new Response(null, { status: 204 });
+          }),
+        },
+        "/api/background-task/:taskId": {
+          GET: corsMiddleware(async (req: Request) => {
+            const token = this.authManager.extractTokenFromHeader(req.headers.get("authorization"));
+            if (!token) {
+              return Response.json({ error: "Missing authorization token" }, { status: 401 });
+            }
+
+            const userInfo = await this.authManager.verifyToken(token);
+            if (!userInfo) {
+              return Response.json({ error: "Invalid authorization token" }, { status: 401 });
+            }
+
+            const taskId = (req as any).params.taskId;
+            const taskStatus = await this.agent8Client.getTaskStatus(
+              taskId,
+              userInfo.userUid,
+            );
+
+            if (!taskStatus) {
+              return Response.json({ error: "Task not found" }, { status: 404 });
+            }
+
+            return Response.json({ success: true, task: taskStatus });
+          }),
+          OPTIONS: corsMiddleware((_req: Request) => {
+            return new Response(null, { status: 204 });
+          }),
+        },
       },
       fetch: corsMiddleware(async (req, server) => {
-        console.log('Sec-WebSocket-Protocol: ', req.headers.get("sec-websocket-protocol"));
-
         // Handle WebSocket upgrade requests
         if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
           if (req.headers.get("sec-websocket-protocol")?.startsWith("agent8")) {
@@ -338,72 +461,65 @@ export class ContainerServer {
               })
             ) {
               return;
-            } else {
-              return new Response("Direct WebSocket upgrade failed", { status: 500 });
             }
-          } else {
-            // Proxy all other WebSocket protocols to localhost
-            const url = new URL(req.url);
-
-            // Check if there's an open port available
-            if (!this.latestOpenPort) {
-              console.warn("No open ports detected yet, ignoring WebSocket proxy request");
-              return new Response("No open ports available", { status: 503 });
-            }
-
-            const targetUrl = `ws://localhost:${this.latestOpenPort}${url.pathname}${url.search}`;
-            const headers = Object.fromEntries(req.headers.entries());
-
-            console.log(`Proxying WebSocket to: ${targetUrl}`);
-
-            if (server.upgrade(req, { data: { targetUrl, headers} })) {
-              return;
-            } else {
-              return new Response("Proxy WebSocket upgrade failed", { status: 500 });
-            }
+            return new Response("Direct WebSocket upgrade failed", { status: 500 });
           }
+          // Proxy all other WebSocket protocols to localhost
+          const url = new URL(req.url);
+
+          // Check if there's an open port available
+          if (!this.latestOpenPort) {
+            console.warn("No open ports detected yet, ignoring WebSocket proxy request");
+            return new Response("No open ports available", { status: 503 });
+          }
+
+          const targetUrl = `ws://localhost:${this.latestOpenPort}${url.pathname}${url.search}`;
+          const headers = Object.fromEntries(req.headers.entries());
+
+          if (server.upgrade(req, { data: { targetUrl, headers } })) {
+            return;
+          }
+          return new Response("Proxy WebSocket upgrade failed", { status: 500 });
         }
 
-       // Proxy HTTP requests to localhost when WebSocket upgrade fails
-      try {
-        const url = new URL(req.url);
+        // Proxy HTTP requests to localhost when WebSocket upgrade fails
+        try {
+          const url = new URL(req.url);
 
-        // Check if there's an open port available
-        if (!this.latestOpenPort) {
-          console.warn("No open ports detected yet, ignoring HTTP proxy request");
-          return new Response("No open ports available", { status: 503 });
-        }
+          // Check if there's an open port available
+          if (!this.latestOpenPort) {
+            console.warn("No open ports detected yet, ignoring HTTP proxy request");
+            return new Response("No open ports available", { status: 503 });
+          }
 
-        const targetUrl = `http://localhost:${this.latestOpenPort}${url.pathname}${url.search}`;
+          const targetUrl = `http://localhost:${this.latestOpenPort}${url.pathname}${url.search}`;
 
-        console.log(`Proxying request to: ${targetUrl}`);
+          const proxyResponse = await fetch(targetUrl, {
+            method: req.method,
+            headers: req.headers,
+            body: req.body,
+          });
 
-        const proxyResponse = await fetch(targetUrl, {
-          method: req.method,
-          headers: req.headers,
-          body: req.body,
-        });
+          // Add CORS headers to the response
+          const headers = new Headers(proxyResponse.headers);
+          headers.set("Access-Control-Allow-Origin", "*");
+          headers.set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+          headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
 
-        // Add CORS headers to the response
-        const headers = new Headers(proxyResponse.headers);
-        headers.set('Access-Control-Allow-Origin', '*');
-        headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-        headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+          // Allow embedding in iframes
+          headers.set("X-Frame-Options", "ALLOWALL");
+          headers.set("Content-Security-Policy", "frame-ancestors *");
+          headers.set("Cross-Origin-Resource-Policy", "cross-origin");
+          headers.set("Cross-Origin-Embedder-Policy", "require-corp");
 
-        // Allow embedding in iframes
-        headers.set('X-Frame-Options', 'ALLOWALL');
-        headers.set('Content-Security-Policy', "frame-ancestors *");
-        headers.set('Cross-Origin-Resource-Policy', 'cross-origin');
-        headers.set('Cross-Origin-Embedder-Policy', 'require-corp');
+          // Inject error capture script for HTML content
+          const contentType = proxyResponse.headers.get("content-type");
+          if (contentType?.includes("text/html")) {
+            // Get response body as text
+            const originalHtml = await proxyResponse.text();
 
-        // Inject error capture script for HTML content
-        const contentType = proxyResponse.headers.get('content-type');
-        if (contentType && contentType.includes('text/html')) {
-          // Get response body as text
-          const originalHtml = await proxyResponse.text();
-
-          // Error capture script
-          const errorCaptureScript = `
+            // Error capture script
+            const errorCaptureScript = `
           <script>
             window.onerror = function(message, source, lineno, colno, error) {
               window.parent.postMessage({
@@ -459,38 +575,38 @@ export class ContainerServer {
             };
           </script>`;
 
-          // Insert script before </head> tag
-          let modifiedHtml = originalHtml;
-          if (originalHtml.includes('</head>')) {
-            modifiedHtml = originalHtml.replace('</head>', `${errorCaptureScript}</head>`);
-          } else {
-            // If head tag is not present, add script to start of body
-            modifiedHtml = originalHtml.replace('<body>', `<body>${errorCaptureScript}`);
+            // Insert script before </head> tag
+            let modifiedHtml = originalHtml;
+            if (originalHtml.includes("</head>")) {
+              modifiedHtml = originalHtml.replace("</head>", `${errorCaptureScript}</head>`);
+            } else {
+              // If head tag is not present, add script to start of body
+              modifiedHtml = originalHtml.replace("<body>", `<body>${errorCaptureScript}`);
 
-            // If body tag is not present, add script to start of HTML
-            if (!originalHtml.includes('<body>')) {
-              modifiedHtml = `${errorCaptureScript}${originalHtml}`;
+              // If body tag is not present, add script to start of HTML
+              if (!originalHtml.includes("<body>")) {
+                modifiedHtml = `${errorCaptureScript}${originalHtml}`;
+              }
             }
+
+            // Create new response with modified HTML
+            return new Response(modifiedHtml, {
+              status: proxyResponse.status,
+              statusText: proxyResponse.statusText,
+              headers: headers,
+            });
           }
 
-          // Create new response with modified HTML
-          return new Response(modifiedHtml, {
+          // If not HTML, return original response as is
+          return new Response(proxyResponse.body, {
             status: proxyResponse.status,
             statusText: proxyResponse.statusText,
-            headers: headers
+            headers: headers,
           });
+        } catch (error) {
+          console.error("Proxy error:", error);
+          return new Response("Proxy error occurred", { status: 500 });
         }
-
-        // If not HTML, return original response as is
-        return new Response(proxyResponse.body, {
-          status: proxyResponse.status,
-          statusText: proxyResponse.statusText,
-          headers: headers
-        });
-      } catch (error) {
-        console.error("Proxy error:", error);
-        return new Response("Proxy error occurred", { status: 500 });
-      }
       }),
       websocket: {
         message: (ws: ServerWebSocket<WebSocketData>, message) => {
@@ -507,12 +623,13 @@ export class ContainerServer {
             this.activeWs.set(ws.data.wsId, ws);
           } else if (isProxyConnection(ws.data)) {
             const targetUrl = ws.data.targetUrl;
-            const targetSocket = new WebSocket(targetUrl, ws.data.headers?.["sec-websocket-protocol"]);
+            const targetSocket = new WebSocket(
+              targetUrl,
+              ws.data.headers?.["sec-websocket-protocol"],
+            );
             ws.data.targetSocket = targetSocket;
 
-            targetSocket.onopen = () => {
-              console.log('WebSocket Proxy connection opened');
-            };
+            targetSocket.onopen = () => {};
 
             targetSocket.onmessage = (ev) => {
               if (typeof ev.data === "string" || ev.data instanceof Uint8Array) {
@@ -520,11 +637,9 @@ export class ContainerServer {
               }
             };
             targetSocket.onclose = () => {
-              console.log('WebSocket Proxy connection closed');
               ws.close();
             };
-            targetSocket.onerror = (ev) => {
-              console.log('WebSocket Proxy connection error', ev);
+            targetSocket.onerror = (_ev) => {
               ws.close();
             };
           }
@@ -726,7 +841,9 @@ export class ContainerServer {
           if (!operation.command) {
             throw new Error("Command is required for spawn operation");
           }
-          return Promise.resolve(this.spawnProcess(operation.command, operation.args || [], ws, operation.options?.env));
+          return Promise.resolve(
+            this.spawnProcess(operation.command, operation.args || [], ws, operation.options?.env),
+          );
         }
         case "input": {
           if (!(operation.pid && operation.data)) {
@@ -784,7 +901,7 @@ export class ContainerServer {
           exclude: [],
           ignoreInitial: false,
           includeContent: false,
-        }
+        };
         const fsWatcher = await this.watchFiles(watcherId, options);
         this.fileSystemWatchers.set(watcherId, fsWatcher);
         this.registerWatchClient(watcherId, ws);
@@ -847,19 +964,33 @@ export class ContainerServer {
       if (now - lastActivity > this.connectionTestInterval) {
         const ws = this.activeWs.get(wsId);
         if (ws) {
-          console.info(`Connection ${wsId} timed out after ${this.connectionTestInterval}ms of inactivity`);
+          console.info(
+            `Connection ${wsId} timed out after ${this.connectionTestInterval}ms of inactivity`,
+          );
           ws.close();
           this.cleanupConnection(wsId);
         }
       }
     }
 
-    if (this.activeWs.size === 0
-      && this.config.processGroup === "worker"
-      && this.machineLastActivityTime
-      && now - this.machineLastActivityTime > this.machineDestroyInterval
+    const activeTasksCount = this.agent8Client.getActiveTasksCount();
+    const hasActiveTasks = activeTasksCount > 0;
+
+    if (hasActiveTasks) {
+      this.machineLastActivityTime = now;
+      console.debug(`Active Agent8 tasks: ${activeTasksCount}, updating activity time`);
+    }
+
+    if (
+      this.activeWs.size === 0 &&
+      this.config.processGroup === "worker" &&
+      this.machineLastActivityTime &&
+      now - this.machineLastActivityTime > this.machineDestroyInterval &&
+      !hasActiveTasks
     ) {
-      console.info("No active connections, releasing server");
+      console.info(
+        `No active connections (WS: ${this.activeWs.size}, Agent8 tasks: ${activeTasksCount}), releasing server`
+      );
       this.stop();
     }
   }
@@ -892,6 +1023,10 @@ export class ContainerServer {
     }
   }
 
+  public getActiveTasksCount(): number {
+    return this.agent8Client.getActiveTasksCount();
+  }
+
   public async stop(): Promise<void> {
     // Self-destruction in DB and Fly
     try {
@@ -903,19 +1038,24 @@ export class ContainerServer {
       }
 
       // Only destroy if machine is not available (has been used)
-      if (!machine.is_available) {
+      if (machine.is_available) {
+        console.info(
+          `[Self-destruction] Machine ${this.machineId} is still available, skipping destruction`,
+        );
+      } else {
         try {
           const flyClient = await this.flyClientPromise;
           await flyClient.destroyMachine(this.machineId);
           console.info(`[Self-destruction] Machine ${this.machineId} has been destroyed in Fly`);
         } catch (error) {
-          console.error(`[Self-destruction] Failed to destroy machine ${this.machineId} in Fly:`, error);
+          console.error(
+            `[Self-destruction] Failed to destroy machine ${this.machineId} in Fly:`,
+            error,
+          );
         }
-      } else {
-        console.info(`[Self-destruction] Machine ${this.machineId} is still available, skipping destruction`);
       }
     } catch (error) {
-      console.error('[Self-destruction] Error while cleaning up machine:', error);
+      console.error("[Self-destruction] Error while cleaning up machine:", error);
     }
   }
 
@@ -927,17 +1067,17 @@ export class ContainerServer {
   ): ContainerResponse<ProcessResponse> {
     // Use the Node.js PTY wrapper for terminal emulation
     // First try the container path, then fallback to local development path
-    let ptyWrapperPath = '/app/pty-wrapper/dist/index.js';
+    let ptyWrapperPath = "/app/pty-wrapper/dist/index.js";
     const ALLOWED_ENV_VARS = [
-      '__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS', 'PNPM_STORE_DIR', 'PNPM_HOME', 'FORWARD_PREVIEW_ERRORS', 'TERM', 'PATH'
+      "__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS", "PNPM_STORE_DIR", "PNPM_HOME", "FORWARD_PREVIEW_ERRORS", "TERM", "PATH"
     ];
 
     // Check if file exists using Node.js methods - more reliable across environments
     try {
       require.resolve(ptyWrapperPath);
-    } catch (error) {
+    } catch (_error) {
       // Fallback to local development path
-      ptyWrapperPath = join(process.cwd(), 'pty-wrapper/dist/index.js');
+      ptyWrapperPath = join(process.cwd(), "pty-wrapper/dist/index.js");
     }
 
     // Default terminal size
@@ -945,13 +1085,7 @@ export class ContainerServer {
     const rows = 24;
 
     // Create command for PTY wrapper
-    const ptyArgs = [
-      ptyWrapperPath,
-      `--cols=${cols}`,
-      `--rows=${rows}`,
-      command,
-      ...args
-    ];
+    const ptyArgs = [ptyWrapperPath, `--cols=${cols}`, `--rows=${rows}`, command, ...args];
 
     const mergedEnv = { ...process.env, ...(env || {}) };
     const filteredEnv = Object.fromEntries(
@@ -959,7 +1093,7 @@ export class ContainerServer {
         .map(key => [key, mergedEnv[key]])
         .filter(([, v]) => v)
     );
-    const childProcess = spawn('node', ptyArgs, {
+    const childProcess = spawn("node", ptyArgs, {
       cwd: this.config.workdirName,
       stdio: ["pipe", "pipe", "pipe"],
       env: filteredEnv,
@@ -1054,9 +1188,9 @@ export class ContainerServer {
     // Send resize message to the process
     if (targetProcess.send) {
       targetProcess.send({
-        type: 'resize',
+        type: "resize",
         cols,
-        rows
+        rows,
       });
     }
 
@@ -1084,18 +1218,30 @@ export class ContainerServer {
           return false;
         }
 
-        if (options.exclude && options.exclude.length > 0 && options.exclude.some(excludePattern => minimatch(path, excludePattern))) {
-          console.log("excluded", path);
+        if (
+          options.exclude &&
+          options.exclude.length > 0 &&
+          options.exclude.some((excludePattern) => minimatch(path, excludePattern))
+        ) {
           return true;
         }
 
-        if (options.include && options.include.length > 0 && options.include.some(includePattern => minimatch(path, includePattern, { dot: true }))) {
-          console.log("included", path);
+        if (
+          options.include &&
+          options.include.length > 0 &&
+          options.include.some((includePattern) => minimatch(path, includePattern, { dot: true }))
+        ) {
           return false;
         }
 
-        const relPath = path.replace(this.config.workdirName, '').replace(/^\/+/, '');
-        const isParentOfPattern = options.include && options.include.length > 0 && options.include.some(includePattern => includePattern.startsWith(relPath + '/') || includePattern.includes('/' + relPath + '/'));
+        const relPath = path.replace(this.config.workdirName, "").replace(/^\/+/, "");
+        const isParentOfPattern =
+          options.include &&
+          options.include.length > 0 &&
+          options.include.some(
+            (includePattern) =>
+              includePattern.startsWith(`${relPath}/`) || includePattern.includes(`/${relPath}/`),
+          );
 
         if (isParentOfPattern) {
           return false;
@@ -1114,17 +1260,23 @@ export class ContainerServer {
       console.error(`File watcher error for watcherId ${watcherId}:`, error);
 
       // Handle specific error types
-      if (error.code === 'EINVAL') {
-        console.warn(`EINVAL error detected for watcherId ${watcherId}. This may be due to temporary files or file system limitations.`);
+      if (error.code === "EINVAL") {
+        console.warn(
+          `EINVAL error detected for watcherId ${watcherId}. This may be due to temporary files or file system limitations.`,
+        );
 
         // Optionally restart watcher with polling if EINVAL occurs frequently
-        if (error.path && error.path.includes('_tmp_')) {
-          console.info(`Temporary file error detected: ${error.path}. Continuing with current watcher.`);
+        if (error.path?.includes("_tmp_")) {
+          console.info(
+            `Temporary file error detected: ${error.path}. Continuing with current watcher.`,
+          );
         }
-      } else if (error.code === 'ENOENT') {
+      } else if (error.code === "ENOENT") {
         console.warn(`File or directory not found for watcherId ${watcherId}: ${error.path}`);
-      } else if (error.code === 'EMFILE' || error.code === 'ENFILE') {
-        console.error(`Too many open files for watcherId ${watcherId}. Consider reducing watch scope.`);
+      } else if (error.code === "EMFILE" || error.code === "ENFILE") {
+        console.error(
+          `Too many open files for watcherId ${watcherId}. Consider reducing watch scope.`,
+        );
       } else {
         console.error(`Unexpected watcher error for watcherId ${watcherId}:`, error);
       }
@@ -1133,12 +1285,13 @@ export class ContainerServer {
     watcher.on("all", async (eventName, filePath, stats) => {
       const eventType = this.mapChokidarEvent(eventName);
       try {
-        const fileContent = options.includeContent && stats?.isFile()
-          ? await readFile(filePath)
-          : null;
+        const fileContent =
+          options.includeContent && stats?.isFile() ? await readFile(filePath) : null;
         this.notifyFileChange(watcherId, eventType, filePath, fileContent);
       } catch (err) {
-        console.error(`Error watching file: ${err instanceof Error ? err.message : 'Unknown error'}`);
+        console.error(
+          `Error watching file: ${err instanceof Error ? err.message : "Unknown error"}`,
+        );
       }
     });
 
@@ -1162,7 +1315,12 @@ export class ContainerServer {
     }
   }
 
-  private notifyFileChange(watcherId: string, eventType: string, filename: string | null, buffer: Uint8Array | null): void {
+  private notifyFileChange(
+    watcherId: string,
+    eventType: string,
+    filename: string | null,
+    buffer: Uint8Array | null,
+  ): void {
     const clients = this.fileWatchClients.get(watcherId);
 
     if (!clients || clients.size === 0) {
@@ -1177,7 +1335,7 @@ export class ContainerServer {
         watcherId,
         eventType,
         filename,
-        buffer: buffer ? Buffer.from(buffer).toString('base64') : null,
+        buffer: buffer ? Buffer.from(buffer).toString("base64") : null,
       },
     };
 
@@ -1195,10 +1353,10 @@ export class ContainerServer {
       this.fileWatchClients.set(watcherId, new Set([ws]));
     }
 
-    if (!this.clientWatchers.has(ws)) {
-      this.clientWatchers.set(ws, new Set([watcherId]));
-    } else {
+    if (this.clientWatchers.has(ws)) {
       this.clientWatchers.get(ws)?.add(watcherId);
+    } else {
+      this.clientWatchers.set(ws, new Set([watcherId]));
     }
   }
 
