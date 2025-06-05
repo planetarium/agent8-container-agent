@@ -46,9 +46,7 @@ const ptyProcess = pty.spawn(command, commandArgs, {
   cols,
   rows,
   cwd: process.cwd(),
-  env: process.env as { [key: string]: string },
-  uid: 2000,
-  gid: 2000
+  env: process.env as { [key: string]: string }
 });
 
 // Forward data from PTY to stdout

@@ -1,6 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { Dirent, Stats } from "node:fs";
-import { chown, mkdir, readFile, readdir, rm, rmdir, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, rmdir, stat, unlink, writeFile } from "node:fs/promises";
 import { join, normalize } from "node:path";
 import { PortScanner } from "./portScanner/portScanner.ts";
 import process from "node:process";
@@ -94,7 +94,6 @@ export class ContainerServer {
     appName: string;
     machineId: string;
     processGroup: string;
-    agentUid: number;
   };
   private authToken: string | undefined;
   private routerDomain: string;
@@ -109,7 +108,6 @@ export class ContainerServer {
   private readonly machineDestroyInterval = 300000; // 5 minutes
   private machinePool: MachinePool | null = null;
   private latestOpenPort: number | null = null;
-  private agentUid: number;
 
   constructor(config: {
     port: number;
@@ -120,7 +118,6 @@ export class ContainerServer {
     appName: string;
     machineId: string;
     processGroup: string;
-    agentUid: number;
   }) {
     this.config = config;
     this.processes = new Map();
@@ -133,7 +130,6 @@ export class ContainerServer {
     this.routerDomain = config.routerDomain;
     this.appName = config.appName;
     this.machineId = config.machineId;
-    this.agentUid = config.agentUid;
     this.authManager = new AuthManager({
       authServerUrl: process.env.AUTH_SERVER_URL || 'https://v8-meme-api.verse8.io'
     });
@@ -661,7 +657,6 @@ export class ContainerServer {
           await writeFile(fullPath, content, {
             encoding: (operation.options?.encoding as BufferEncoding) || "utf-8",
           });
-          await chown(fullPath, this.agentUid, this.agentUid);
           return { success: true, data: null };
         }
         case "rm": {
@@ -678,7 +673,6 @@ export class ContainerServer {
           await mkdir(fullPath, {
             recursive: operation.options?.recursive,
           });
-          await chown(fullPath, this.agentUid, this.agentUid);
           return { success: true, data: null };
         }
         case "stat": {
@@ -697,8 +691,7 @@ export class ContainerServer {
 
           const tree = JSON.parse(content) as FileSystemTree;
 
-          await mount(fullPath, tree, this.agentUid);
-          await chown(fullPath, this.agentUid, this.agentUid);
+          await mount(fullPath, tree);
           return { success: true, data: null };
         }
         default:
@@ -893,17 +886,6 @@ export class ContainerServer {
   }
 
   public async stop(): Promise<void> {
-    // Kill all processes
-    for (const [pid, process] of this.processes.entries()) {
-      process.kill();
-      this.processes.delete(pid);
-    }
-
-    this.cleanup();
-
-    // Clean up project directory
-    await clearDirectory('/home/project');
-
     // Self-destruction in DB and Fly
     try {
       const machine = await this.machinePool?.getMachineById(this.machineId);
@@ -939,9 +921,6 @@ export class ContainerServer {
     // Use the Node.js PTY wrapper for terminal emulation
     // First try the container path, then fallback to local development path
     let ptyWrapperPath = '/app/pty-wrapper/dist/index.js';
-    const ALLOWED_ENV_VARS = [
-      '__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS', 'PNPM_STORE_DIR', 'PNPM_HOME', 'FORWARD_PREVIEW_ERRORS', 'TERM', 'PATH'
-    ];
 
     // Check if file exists using Node.js methods - more reliable across environments
     try {
@@ -964,16 +943,10 @@ export class ContainerServer {
       ...args
     ];
 
-    const mergedEnv = { ...process.env, ...(env || {}) };
-    const filteredEnv = Object.fromEntries(
-      ALLOWED_ENV_VARS
-        .map(key => [key, mergedEnv[key]])
-        .filter(([, v]) => v)
-    );
     const childProcess = spawn('node', ptyArgs, {
       cwd: this.config.workdirName,
       stdio: ["pipe", "pipe", "pipe"],
-      env: filteredEnv,
+      env: { ...process.env, coep: this.config.coep, ...(env || {}) },
       detached: true,
     });
 
@@ -1248,9 +1221,8 @@ export function ensureSafePath(workdir: string, userPath: string): string {
   );
 }
 
-async function mount(mountPath: string, tree: FileSystemTree, agentUid: number) {
+async function mount(mountPath: string, tree: FileSystemTree) {
   await mkdir(mountPath, { recursive: true });
-  await chown(mountPath, agentUid, agentUid);
 
   for (const [name, item] of Object.entries(tree)) {
     const fullPath = join(mountPath, name);
@@ -1258,9 +1230,8 @@ async function mount(mountPath: string, tree: FileSystemTree, agentUid: number) 
     if ("file" in item) {
       await writeFile(fullPath, item.file.contents);
     } else if ("directory" in item) {
-      await mount(fullPath, item.directory, agentUid);
+      await mount(fullPath, item.directory);
     }
-    await chown(fullPath, agentUid, agentUid);
   }
 }
 
