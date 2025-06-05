@@ -46,6 +46,7 @@ RUN apt-get update && apt-get install -y \
     g++ \
     build-essential \
     git \
+    procps \
     && apt-get clean
 
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
@@ -85,6 +86,19 @@ WORKDIR /home/project
 COPY --from=template-builder /app/agent8-templates /app/agent8-templates
 COPY --from=template-builder /app/agent8-templates/node_modules ./node_modules
 COPY --from=template-builder /app/agent8-templates/pnpm-lock.yaml ./pnpm-lock.yaml
+
+COPY .zshrc /home/agent8/.zshrc
+
+# agent8 사용자 생성
+RUN groupadd -r -g 2000 agent8 && useradd -r -u 2000 -g agent8 -m agent8
+
+# 작업 디렉토리 생성 및 권한 설정
+RUN chown -R agent8:agent8 /home/project
+RUN chmod 777 /pnpm
+RUN chown -R agent8:agent8 /pnpm
+
+# 다른 시스템 디렉토리 접근 제한
+RUN chmod 750 /proc 
 
 EXPOSE 3000
 
