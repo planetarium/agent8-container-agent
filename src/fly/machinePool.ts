@@ -59,6 +59,7 @@ export class MachinePool {
           where: { deleted: false },
         });
         const dbMachineIds = new Set(machines.map((m: { machine_id: string }) => m.machine_id));
+        
         // 3. DB에는 있는데 실제로 없는 머신 → soft delete
         const machinesToDelete = machines.filter((m: { machine_id: string }) => !flyMachineIds.has(m.machine_id));
         if (machinesToDelete.length > 0) {
@@ -69,17 +70,32 @@ export class MachinePool {
             data: { deleted: true }
           });
         }
-        // 4. 실제로는 있는데 DB에 없는 머신 → DB에 추가
-        const machinesToAdd = flyMachines.filter((m: { id: string }) => !dbMachineIds.has(m.id));
+
+        // 4. 실제로는 있는데 DB에 없는 머신들 중에서 metadata API로 userId가 없는 것만 필터링
+        const machinesToCheck = flyMachines.filter((m: { id: string }) => !dbMachineIds.has(m.id));
+
+        // 각 머신의 metadata를 병렬로 확인
+        const metadataResults = await Promise.all(
+          machinesToCheck.map(async (m) => {
+            const metadata = await this.flyClient.getMachineMetadata(m.id);
+            return { machine: m, hasUserId: !!metadata?.assigned_to };
+          })
+        );
+
+        // userId가 없는 머신만 DB에 추가
+        const machinesToAdd = metadataResults
+          .filter(result => !result.hasUserId)
+          .map(result => ({
+            machine_id: result.machine.id,
+            ipv6: result.machine.private_ip || '',
+            deleted: false,
+            is_available: true,
+            created_at: new Date(result.machine.created_at || Date.now()),
+          }));
+
         if (machinesToAdd.length > 0) {
           await tx.machine_pool.createMany({
-            data: machinesToAdd.map((m: { id: string; private_ip?: string; created_at?: string }) => ({
-              machine_id: m.id,
-              ipv6: m.private_ip || '',
-              deleted: false,
-              is_available: true,
-              created_at: new Date(m.created_at || Date.now()),
-            })),
+            data: machinesToAdd,
             skipDuplicates: true,
           });
         }
@@ -172,7 +188,7 @@ export class MachinePool {
       const validMachines = machines.filter(m => m && m.id);
       if (validMachines.length > 0) {
         // DB에 한꺼번에 저장 (항상 트랜잭션 사용)
-        await prisma.$transaction(async (tx) => {
+        await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
           await tx.machine_pool.createMany({
             data: validMachines.map((m: any) => ({
               machine_id: m.id,
@@ -202,8 +218,16 @@ export class MachinePool {
         return null;
       }
 
+      // Set metadata after machine creation
+      try {
+        await this.flyClient.updateMachineMetadata(machine.id, { assigned_to: userId });
+      } catch (error) {
+        console.error('Error setting machine metadata:', error);
+        // Metadata 설정 실패는 치명적이지 않으므로 계속 진행
+      }
+
       // Create and assign machine in a single transaction
-      const result = await prisma.$transaction(async (tx) => {
+      const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         const created = await tx.machine_pool.create({
           data: {
             machine_id: machine.id,
@@ -254,7 +278,17 @@ export class MachinePool {
           return null;
         }
 
-        return result[0].machine_id;
+        const machineId = result[0].machine_id;
+
+        // Update machine metadata with userId
+        try {
+          await this.flyClient.updateMachineMetadata(machineId, { assigned_to: userId });
+        } catch (error) {
+          console.error('Error updating machine metadata:', error);
+          // Metadata update 실패는 치명적이지 않으므로 계속 진행
+        }
+
+        return machineId;
       });
     } catch (error) {
       console.error('Error getting machine from pool:', error);
@@ -358,7 +392,7 @@ export class MachinePool {
    */
   async softDeleteMachine(machineId: string): Promise<boolean> {
     try {
-      const result = await prisma.$transaction(async (tx) => {
+      const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         const deleted = await tx.$queryRaw<{ machine_id: string }[]>`
           UPDATE machine_pool
           SET deleted = true
