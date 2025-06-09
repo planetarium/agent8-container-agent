@@ -117,6 +117,40 @@ export class FlyClient {
   }
 
   /**
+   * Update machine metadata
+   * @param machineId - The ID of the machine to update
+   * @param metadata - The metadata to set
+   */
+  async updateMachineMetadata(machineId: string, metadata: Record<string, string>): Promise<void> {
+    try {
+      // 각 metadata key-value 쌍에 대해 개별 API 호출
+      await Promise.all(
+        Object.entries(metadata).map(async ([key, value]) => {
+          const res = await fetch(
+            `${this.config.baseUrl}/apps/${this.config.appName}/machines/${machineId}/metadata/${key}`,
+            {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${this.config.apiToken}`,
+                Accept: "application/json",
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({ value }),
+            }
+          );
+
+          if (!res.ok) {
+            throw new Error(`HTTP ${res.status} - ${res.statusText}`);
+          }
+        })
+      );
+    } catch (e: unknown) {
+      console.error("Fly API error (updateMachineMetadata):", e instanceof Error ? e.message : e);
+      throw e;
+    }
+  }
+
+  /**
    * Returns the list of actual machines from the Fly API.
    */
   async listFlyMachines(): Promise<any[]> {
@@ -135,6 +169,36 @@ export class FlyClient {
     } catch (e: unknown) {
       console.error("Fly API error (listFlyMachines):", e instanceof Error ? e.message : e);
       return [];
+    }
+  }
+
+  /**
+   * Get machine metadata
+   * @param machineId - The ID of the machine to get metadata for
+   * @returns The machine's metadata or null if not found
+   */
+  async getMachineMetadata(machineId: string): Promise<Record<string, string> | null> {
+    try {
+      const res = await fetch(`${this.config.baseUrl}/apps/${this.config.appName}/machines/${machineId}/metadata`, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${this.config.apiToken}`,
+          Accept: "application/json",
+        },
+      });
+
+      if (!res.ok) {
+        if (res.status === 404) {
+          return null;
+        }
+        console.error(`HTTP ${res.status} - ${res.statusText}`);
+        return null;
+      }
+
+      return await res.json();
+    } catch (e: unknown) {
+      console.error("Fly API error (getMachineMetadata):", e instanceof Error ? e.message : e);
+      return null;
     }
   }
 }
