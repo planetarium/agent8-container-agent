@@ -121,29 +121,24 @@ export class FlyClient {
    * @param machineId - The ID of the machine to update
    * @param metadata - The metadata to set
    */
-  async updateMachineMetadata(machineId: string, metadata: Record<string, string>): Promise<void> {
+  async updateMachineMetadata(machineId: string, key: string, value: string): Promise<void> {
     try {
-      // 각 metadata key-value 쌍에 대해 개별 API 호출
-      await Promise.all(
-        Object.entries(metadata).map(async ([key, value]) => {
-          const res = await fetch(
-            `${this.config.baseUrl}/apps/${this.config.appName}/machines/${machineId}/metadata/${key}`,
-            {
-              method: "POST",
-              headers: {
-                Authorization: `Bearer ${this.config.apiToken}`,
-                Accept: "application/json",
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({ value }),
-            }
-          );
-
-          if (!res.ok) {
-            throw new Error(`HTTP ${res.status} - ${res.statusText}`);
-          }
-        })
+      const res = await fetch(
+        `${this.config.baseUrl}/apps/${this.config.appName}/machines/${machineId}/metadata/${key}`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${this.config.apiToken}`,
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ value }),
+        }
       );
+
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status} - ${res.statusText}`);
+      }
     } catch (e: unknown) {
       console.error("Fly API error (updateMachineMetadata):", e instanceof Error ? e.message : e);
       throw e;

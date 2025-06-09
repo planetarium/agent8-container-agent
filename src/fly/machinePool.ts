@@ -7,6 +7,7 @@ export class MachinePool {
   private readonly flyClient: FlyClient;
   private readonly defaultPoolSize: number;
   private readonly checkInterval: number;
+  private readonly metadataKey = "assigned_to" as const;
   private checkTimer: NodeJS.Timeout | null = null;
 
   constructor(
@@ -78,7 +79,7 @@ export class MachinePool {
         const metadataResults = await Promise.all(
           machinesToCheck.map(async (m) => {
             const metadata = await this.flyClient.getMachineMetadata(m.id);
-            return { machine: m, hasUserId: !!metadata?.assigned_to };
+            return { machine: m, hasUserId: !!metadata?.[this.metadataKey] };
           })
         );
 
@@ -220,7 +221,7 @@ export class MachinePool {
 
       // Set metadata after machine creation
       try {
-        await this.flyClient.updateMachineMetadata(machine.id, { assigned_to: userId });
+        await this.flyClient.updateMachineMetadata(machine.id, this.metadataKey, userId);
       } catch (error) {
         console.error('Error setting machine metadata:', error);
         // Metadata 설정 실패는 치명적이지 않으므로 계속 진행
@@ -282,7 +283,7 @@ export class MachinePool {
 
         // Update machine metadata with userId
         try {
-          await this.flyClient.updateMachineMetadata(machineId, { assigned_to: userId });
+          await this.flyClient.updateMachineMetadata(machineId, this.metadataKey, userId);
         } catch (error) {
           console.error('Error updating machine metadata:', error);
           // Metadata update 실패는 치명적이지 않으므로 계속 진행
