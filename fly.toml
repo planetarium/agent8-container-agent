@@ -35,5 +35,6 @@ primary_region = 'nrt'
   cpus = 1
 
 [processes]
-  app = ""
-  scheduler = ""
+  app = "bun run dist/index.js"
+  scheduler = "bun run dist/index.js"
+  gitlab-poller = "bun run dist/index.js"
