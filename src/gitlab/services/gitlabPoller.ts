@@ -20,7 +20,8 @@ export class GitLabPoller {
     this.containerService = new GitLabContainerService(
       machinePool,
       this.issueRepository,
-      this.gitlabClient
+      this.gitlabClient,
+      process.env.FLY_ROUTER_DOMAIN || 'agent8.verse8.net'
     );
     this.containerTrigger = new ContainerTrigger(this.containerService);
     this.checkInterval = config.pollInterval * 60 * 1000;

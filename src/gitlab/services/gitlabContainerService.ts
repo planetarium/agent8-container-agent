@@ -2,45 +2,72 @@ import { MachinePool } from '../../fly/machinePool.js';
 import { GitLabIssue, ContainerCreationOptions } from '../types/index.js';
 import { GitLabIssueRepository } from '../repositories/gitlabIssueRepository.js';
 import { GitLabClient } from './gitlabClient.js';
+import { GitLabTaskDelegationService } from './gitlabTaskDelegationService.js';
 
 export class GitLabContainerService {
   private machinePool: MachinePool;
   private issueRepository: GitLabIssueRepository;
   private gitlabClient?: GitLabClient;
+  private taskDelegationService: GitLabTaskDelegationService;
+  private routerDomain: string;
 
   constructor(
     machinePool: MachinePool,
     issueRepository: GitLabIssueRepository,
-    gitlabClient?: GitLabClient
+    gitlabClient?: GitLabClient,
+    routerDomain: string = process.env.FLY_ROUTER_DOMAIN || 'agent8.verse8.net'
   ) {
     this.machinePool = machinePool;
     this.issueRepository = issueRepository;
     this.gitlabClient = gitlabClient;
+    this.routerDomain = routerDomain;
+
+    // Initialize GitLabTaskDelegationService
+    this.taskDelegationService = new GitLabTaskDelegationService(
+      issueRepository,
+      gitlabClient,
+      routerDomain
+    );
+
+    console.log(`[GitLab-Container] Service initialized with domain: ${this.routerDomain}`);
   }
 
   async createContainerForIssue(issue: GitLabIssue): Promise<string | null> {
     try {
       const userId = this.generateUserId(issue);
 
-      console.log(`Creating container for issue #${issue.iid}`);
+      console.log(`[GitLab-Container] Creating container for issue #${issue.iid}`);
 
-      // Use existing MachinePool method with minimal changes
+      // Step 1: Create container (existing logic)
       const containerId = await this.machinePool.createNewMachineWithUser(userId);
 
       if (!containerId) {
-        console.error(`Failed to create container for issue ${issue.id}`);
+        console.error(`[GitLab-Container] Failed to create container for issue ${issue.id}`);
         return null;
       }
 
-      // Update container with GitLab environment variables after creation
+      // Step 2: Wait for container readiness (new)
+      console.log(`[GitLab-Container] Waiting for container ${containerId} to be ready...`);
+      const isReady = await this.waitForContainerReady(containerId, 120000); // 2 minutes
+
+      if (!isReady) {
+        console.error(`[GitLab-Container] Container ${containerId} failed to become ready`);
+        await this.handleDelegationError(issue, containerId, new Error('Container readiness timeout'));
+        return containerId; // Return container ID even if delegation fails
+      }
+
+      // Step 3: Configure container (existing)
       await this.configureContainerForGitLab(containerId, issue);
 
-      // Store GitLab issue information
+      // Step 4: Store GitLab issue information (existing)
       await this.issueRepository.markIssueProcessed(issue, containerId);
 
-      console.log(`Container ${containerId} created for issue #${issue.iid}`);
+      console.log(`[GitLab-Container] Container ${containerId} created and ready for issue #${issue.iid}`);
 
-      // Send notifications
+      // Step 5: Delegate task to container (new)
+      await this.delegateTaskToContainer(issue, containerId);
+
+      // Step 6: Send notifications (existing, but skip for now to avoid duplication)
       await Promise.all([
         this.sendWebhookNotification(issue, containerId),
         this.addIssueComment(issue, containerId)
@@ -48,9 +75,137 @@ export class GitLabContainerService {
 
       return containerId;
     } catch (error) {
-      console.error(`Error creating container for issue ${issue.id}:`, error);
+      console.error(`[GitLab-Container] Error creating container for issue ${issue.id}:`, error);
       return null;
     }
+  }
+
+  /**
+   * Wait for container to be ready with exponential backoff
+   */
+  private async waitForContainerReady(containerId: string, maxWaitTime: number = 120000): Promise<boolean> {
+    const startTime = Date.now();
+    let attempt = 1;
+
+    console.log(`[GitLab-Container] Starting health check for container ${containerId}`);
+
+    while (Date.now() - startTime < maxWaitTime) {
+      // Exponential backoff: 5s → 7.5s → 11.25s → ... (max 30s)
+      const delay = Math.min(5000 * Math.pow(1.5, attempt - 1), 30000);
+
+      try {
+        const containerUrl = this.buildContainerUrl(containerId);
+        const healthUrl = `${containerUrl}/api/health`;
+
+        console.log(`[GitLab-Container] Health check attempt ${attempt} for ${containerId}: ${healthUrl}`);
+
+        const response = await fetch(healthUrl, {
+          method: 'GET',
+          headers: { 'User-Agent': 'GitLab-Agent8-Integration' },
+          signal: AbortSignal.timeout(5000) // 5 second timeout per request
+        });
+
+        if (response.ok) {
+          const elapsed = Date.now() - startTime;
+          console.log(`[GitLab-Container] ✅ Container ${containerId} is ready (${elapsed}ms, ${attempt} attempts)`);
+          return true;
+        } else {
+          console.log(`[GitLab-Container] Health check failed with status ${response.status}`);
+        }
+      } catch (error) {
+        console.log(`[GitLab-Container] Health check attempt ${attempt} failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      }
+
+      // Wait before next attempt
+      await new Promise(resolve => setTimeout(resolve, delay));
+      attempt++;
+    }
+
+    const elapsed = Date.now() - startTime;
+    console.log(`[GitLab-Container] ❌ Container ${containerId} failed to become ready within ${maxWaitTime}ms (${elapsed}ms elapsed, ${attempt - 1} attempts)`);
+    return false;
+  }
+
+  /**
+   * Delegate task to container
+   */
+  private async delegateTaskToContainer(issue: GitLabIssue, containerId: string): Promise<void> {
+    try {
+      console.log(`[GitLab-Container] 🚀 Delegating task for issue #${issue.iid} to container ${containerId}`);
+
+      const taskResult = await this.taskDelegationService.delegateTaskToContainer(
+        issue,
+        containerId,
+        {
+          timeout: 30000, // 30 second delegation timeout
+          contextOptimization: true,
+          promptId: 'gitlab-agent8',
+          targetServerUrl: process.env.LLM_SERVER_URL
+        }
+      );
+
+      if (taskResult) {
+        console.log(`[GitLab-Container] ✅ Task ${taskResult.taskId} delegated successfully to container ${containerId}`);
+        console.log(`[GitLab-Container] Container will autonomously report results to GitLab when complete`);
+      } else {
+        console.error(`[GitLab-Container] ❌ Task delegation failed for issue #${issue.iid}`);
+        throw new Error('Task delegation returned null');
+      }
+
+    } catch (error) {
+      console.error(`[GitLab-Container] ❌ Task delegation failed for issue #${issue.iid}:`, error);
+      await this.handleDelegationError(issue, containerId, error as Error);
+      throw error;
+    }
+  }
+
+  /**
+   * Handle delegation errors with GitLab feedback
+   */
+  private async handleDelegationError(issue: GitLabIssue, containerId: string, error: Error): Promise<void> {
+    console.error(`[GitLab-Container] ❌ Task delegation error for issue #${issue.iid}:`, error);
+
+    try {
+      // Add error comment to GitLab issue
+      if (this.gitlabClient) {
+        const containerUrl = containerId ? this.buildContainerUrl(containerId) : 'N/A';
+
+        const errorComment = `## ❌ Agent8 Task Delegation Failed
+
+**Error**: ${error.message}
+**Container**: ${containerId || 'Failed to create'}
+**Timestamp**: ${new Date().toISOString()}
+
+${containerId ? `**Manual Access**: [View Container](${containerUrl})` : ''}
+
+**Action Required**: Manual intervention needed to process this issue.
+
+---
+*Generated automatically by Agent8 GitLab integration.*`;
+
+        await this.gitlabClient.addIssueComment(
+          issue.project_id,
+          issue.iid,
+          errorComment
+        );
+
+        console.log(`[GitLab-Container] Error comment added to issue #${issue.iid}`);
+      }
+
+      // Update database status (optional)
+      // await this.issueRepository.updateIssueTaskStatus(issue.id, 'failed', error.message);
+
+    } catch (commentError) {
+      console.error(`[GitLab-Container] Failed to add error comment to issue #${issue.iid}:`, commentError);
+    }
+  }
+
+  /**
+   * Build container URL using app name and router domain
+   */
+  private buildContainerUrl(containerId: string): string {
+    const appName = process.env.TARGET_APP_NAME || 'agent8';
+    return `https://${appName}-${containerId}.${this.routerDomain}`;
   }
 
   private generateUserId(issue: GitLabIssue): string {
@@ -60,7 +215,7 @@ export class GitLabContainerService {
   private async configureContainerForGitLab(containerId: string, issue: GitLabIssue): Promise<void> {
     // This method would ideally update container environment variables
     // For now, we'll store the mapping for future reference
-    console.log(`Configured container ${containerId} for GitLab issue #${issue.iid}`);
+    console.log(`[GitLab-Container] Configured container ${containerId} for GitLab issue #${issue.iid}`);
 
     // Environment variables that would be set:
     const gitlabEnv = {
@@ -108,10 +263,10 @@ export class GitLabContainerService {
       });
 
       if (response.ok) {
-        console.log(`Webhook notification sent for issue ${issue.id}`);
+        console.log(`[GitLab-Container] Webhook notification sent for issue ${issue.id}`);
       }
     } catch (error) {
-      console.error('Error sending webhook notification:', error);
+      console.error('[GitLab-Container] Error sending webhook notification:', error);
     }
   }
 
@@ -119,18 +274,31 @@ export class GitLabContainerService {
     if (!this.gitlabClient) return;
 
     try {
-      const comment = `Container created automatically
+      const containerUrl = this.buildContainerUrl(containerId);
 
-Container ID: \`${containerId}\`
-Access URL: \`https://${containerId}.your-domain.com\`
+      const comment = `## 🚀 Container Created & Task Delegated
 
-This container was created automatically based on issue labels.
-Trigger labels: ${issue.labels.join(', ')}`;
+**Container ID**: \`${containerId}\`
+**Container URL**: [${containerUrl}](${containerUrl})
+**Status**: Task delegated, container will report results automatically
+
+**Task Information**:
+- Issue: #${issue.iid} - ${issue.title}
+- Labels: ${issue.labels.join(', ') || 'None'}
+- Created by: ${issue.author.name} (@${issue.author.username})
+
+**Next Steps**:
+- Container is processing your request autonomously
+- Results will be posted as a comment when complete
+- Monitor container at the URL above if needed
+
+---
+*This container was created automatically by Agent8 GitLab integration.*`;
 
       await this.gitlabClient.addIssueComment(issue.project_id, issue.iid, comment);
-      console.log(`Comment added to issue #${issue.iid}`);
+      console.log(`[GitLab-Container] Task delegation comment added to issue #${issue.iid}`);
     } catch (error) {
-      console.error(`Error adding comment to issue ${issue.id}:`, error);
+      console.error(`[GitLab-Container] Error adding comment to issue ${issue.id}:`, error);
     }
   }
 
