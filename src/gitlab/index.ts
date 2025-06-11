@@ -1,6 +1,7 @@
 export { GitLabPoller } from './services/gitlabPoller.js';
 export { GitLabClient } from './services/gitlabClient.js';
 export { GitLabContainerService } from './services/gitlabContainerService.js';
+export { GitLabTaskDelegationService } from './services/gitlabTaskDelegationService.js';
 export { GitLabIssueRepository } from './repositories/gitlabIssueRepository.js';
 export { ContainerTrigger } from './triggers/containerTrigger.js';
 export { GitLabApiRoutes } from './api/gitlabApiRoutes.js';
@@ -13,7 +14,12 @@ export type {
   GitLabConfig,
   GitLabIssueRecord,
   ContainerCreationOptions,
-  NotificationPayload
+  NotificationPayload,
+  TaskDelegationOptions,
+  TaskDelegationResult,
+  TaskStatusResult,
+  AgentTask,
+  ApiResponse
 } from './types/index.js';
 
 // Health check utilities for system integration
