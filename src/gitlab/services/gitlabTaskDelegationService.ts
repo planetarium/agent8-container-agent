@@ -50,7 +50,7 @@ export class GitLabTaskDelegationService {
       const payload = {
         targetServerUrl: options.targetServerUrl,
         messages: messages,
-        promptId: options.promptId || process.env.GITLAB_TASK_PROMPT_ID || 'gitlab-agent8',
+        promptId: 'agent8',
         contextOptimization: options.contextOptimization ?? (process.env.GITLAB_CONTEXT_OPTIMIZATION === 'true'),
         files: {}, // Empty files object for now
         // 🔥 Add GitLab info for container autonomous reporting
@@ -219,21 +219,11 @@ ${artifactList}
    * Convert GitLab issue to Agent8 message format (user message only)
    */
   private convertIssueToMessages(issue: GitLabIssue): any[] {
-    // GitLab 메타데이터를 user 메시지에 포함
-    const labelsText = issue.labels.length > 0 ? issue.labels.join(', ') : 'None';
+    if (!issue.description || issue.description.trim() === '') {
+      throw new Error(`GitLab issue #${issue.iid} has no description`);
+    }
 
-    const userPrompt = `GitLab Issue #${issue.iid}: ${issue.title}
-
-**Issue Details:**
-- Author: ${issue.author.name} (@${issue.author.username})
-- Labels: ${labelsText}
-- Project: ${issue.project_id}
-- URL: ${issue.web_url}
-
-**Description:**
-${issue.description || 'No description provided.'}
-
-Please analyze this GitLab issue and implement the requested changes. Create or modify files as needed to address the requirements.`;
+    const userPrompt = issue.description;
 
     const messages = [
       { role: 'user', content: userPrompt }
@@ -243,8 +233,7 @@ Please analyze this GitLab issue and implement the requested changes. Create or 
       issueId: issue.iid,
       title: issue.title.substring(0, 50) + '...',
       messagesCount: messages.length,
-      contentLength: userPrompt.length,
-      labelsCount: issue.labels.length
+      contentLength: userPrompt.length
     });
 
     return messages;
