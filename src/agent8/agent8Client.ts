@@ -14,6 +14,8 @@ import type {
   ParserCallbacks,
 } from "./index";
 import { ActionRunner, StreamingMessageParser } from "./index";
+import { GitLabClient } from '../gitlab/services/gitlabClient.js';
+import { GitLabGitService } from '../gitlab/services/gitlabGitService.js';
 
 interface FileMap {
   [key: string]: {
@@ -98,6 +100,7 @@ class MessageConverter {
 export class Agent8Client {
   private tasks: Map<string, Task> = new Map();
   private readonly actionRunner: ActionRunner;
+  private readonly gitlabGitService?: GitLabGitService;
 
   constructor(containerServer: ContainerServer, workdir: string) {
     console.log(`[Agent8] Initializing - workdir: ${workdir}`);
@@ -125,6 +128,12 @@ export class Agent8Client {
 
     this.actionRunner = new ActionRunner(containerServer, workdir, actionCallbacks);
     console.log(`[Agent8] ActionRunner initialization completed`);
+
+    // Initialize GitLab Git workspace (non-blocking)
+    this.initializeGitWorkspace(workdir).catch((error) => {
+      console.error('[Agent8] Git workspace initialization failed:', error.message);
+      // Agent8Client continues running even if git checkout fails
+    });
   }
 
   async createTask(request: any): Promise<string> {
@@ -613,5 +622,39 @@ export class Agent8Client {
       }
     }
     return activeTasks;
+  }
+
+  private async initializeGitWorkspace(workdir: string): Promise<void> {
+    // Check if GitLab environment is configured
+    if (!process.env.GITLAB_URL || !process.env.GITLAB_TOKEN) {
+      console.log('[Agent8] GitLab not configured, skipping git checkout');
+      return;
+    }
+
+    const projectId = parseInt(process.env.GITLAB_PROJECT_ID || '0');
+    const issueIid = parseInt(process.env.GITLAB_ISSUE_IID || '0');
+
+    if (!projectId || !issueIid) {
+      console.log('[Agent8] No GitLab issue info provided, skipping git checkout');
+      return;
+    }
+
+    try {
+      console.log(`[Agent8] Initializing GitLab git service`);
+      const gitlabClient = new GitLabClient(process.env.GITLAB_URL, process.env.GITLAB_TOKEN);
+      (this as any).gitlabGitService = new GitLabGitService(gitlabClient, workdir);
+
+      console.log(`[Agent8] Starting git checkout for project ${projectId}, issue #${issueIid}`);
+      const result = await (this as any).gitlabGitService.checkoutRepositoryForIssue(projectId, issueIid);
+
+      if (result.success) {
+        console.log(`[Agent8] Git workspace initialized successfully`);
+        console.log(`[Agent8] Repository: ${result.clonedRepository}, Branch: ${result.createdBranch}`);
+      } else {
+        console.error(`[Agent8] Git workspace initialization failed: ${result.error}`);
+      }
+    } catch (error: any) {
+      console.error(`[Agent8] Git workspace initialization error: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 }

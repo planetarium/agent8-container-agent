@@ -21,6 +21,7 @@
     "minimatch": "^10.0.1",
     "node-cron": "^3.0.3",
     "prisma": "^6.7.0",
+    "simple-git": "^3.28.0",
     "zod": "^3.24.3"
   },
   "devDependencies": {

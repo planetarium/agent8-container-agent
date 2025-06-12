@@ -118,3 +118,6 @@ export * from './taskDelegation.js';
 
 // Lifecycle Management Types
 export * from './lifecycle.js';
+
+// Git Management Types
+export * from './git.js';
