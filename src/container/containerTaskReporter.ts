@@ -115,10 +115,19 @@ export class ContainerTaskReporter {
     const agent8Client = new Agent8Client(containerServer, workdir);
 
     try {
+      // 🧪 테스트 모드: 환경변수에서 고정 토큰 사용
+      let effectiveToken = process.env.GITLAB_TOKEN || '';
+      const useTestToken = process.env.USE_TEST_TOKEN?.toLowerCase() === 'true';
+
+      if (useTestToken && process.env.TEST_V8_ACCESS_TOKEN) {
+        effectiveToken = process.env.TEST_V8_ACCESS_TOKEN;
+        console.log(`[Container-Reporter] 🧪 TEST MODE: Using fixed token from environment variable`);
+      }
+
       // Create task request in Agent8Client format
       const taskRequest = {
         userId: 'container-task',
-        token: process.env.GITLAB_TOKEN || '',
+        token: effectiveToken,
         targetServerUrl: taskPayload.targetServerUrl,
         messages: taskPayload.messages,
         files: taskPayload.files || {},

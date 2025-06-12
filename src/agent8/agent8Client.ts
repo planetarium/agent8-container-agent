@@ -240,14 +240,23 @@ export class Agent8Client {
       console.log(`[Agent8] Using existing cookies: ${cookieString.substring(0, 50)}...`);
     }
 
-    if (request.token) {
-      const tokenCookie = `v8AccessToken=${request.token}`;
+        // 🧪 테스트 모드: 환경변수에서 고정 토큰 사용
+    let effectiveToken = request.token;
+    const useTestToken = process.env.USE_TEST_TOKEN?.toLowerCase() === 'true';
+
+    if (useTestToken && process.env.TEST_V8_ACCESS_TOKEN) {
+      effectiveToken = process.env.TEST_V8_ACCESS_TOKEN;
+      console.log(`[Agent8] 🧪 TEST MODE: Using fixed token from environment variable`);
+    }
+
+    if (effectiveToken) {
+      const tokenCookie = `v8AccessToken=${effectiveToken}`;
       if (cookieString) {
         cookieString += `; ${tokenCookie}`;
       } else {
         cookieString = tokenCookie;
       }
-      console.log(`[Agent8] Token cookie added`);
+      console.log(`[Agent8] Token cookie added${useTestToken ? ' (TEST MODE)' : ''}`);
     }
 
     if (cookieString) {
