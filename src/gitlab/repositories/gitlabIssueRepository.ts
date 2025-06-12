@@ -138,6 +138,51 @@ export class GitLabIssueRepository {
     });
   }
 
+  async getLifecycleStats(): Promise<{
+    total: number;
+    byStatus: Record<string, number>;
+    completionRate: number;
+  }> {
+    const issues = await this.prisma.gitlab_issues.findMany({
+      select: { labels: true }
+    });
+
+    const LIFECYCLE_LABELS = ['TODO', 'WIP', 'CONFIRM NEEDED', 'DONE', 'REJECT'];
+    const statusCounts: Record<string, number> = {};
+
+    LIFECYCLE_LABELS.forEach(label => {
+      statusCounts[label] = 0;
+    });
+    statusCounts['NO_LABEL'] = 0;
+
+    let completedCount = 0;
+
+    for (const issue of issues) {
+      const labels = JSON.parse(issue.labels) as string[];
+      const lifecycleLabel = labels.find(label =>
+        LIFECYCLE_LABELS.includes(label)
+      );
+
+      if (lifecycleLabel) {
+        statusCounts[lifecycleLabel]++;
+        if (lifecycleLabel === 'DONE') {
+          completedCount++;
+        }
+      } else {
+        statusCounts['NO_LABEL']++;
+      }
+    }
+
+    const total = issues.length;
+    const completionRate = total > 0 ? (completedCount / total) * 100 : 0;
+
+    return {
+      total,
+      byStatus: statusCounts,
+      completionRate
+    };
+  }
+
   async close(): Promise<void> {
     await this.prisma.$disconnect();
   }
