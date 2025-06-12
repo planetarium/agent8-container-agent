@@ -33,6 +33,7 @@ import type { CandidatePort } from "./portScanner";
 import { PortScanner } from "./portScanner/portScanner";
 import type { DirectConnectionData, ProxyData } from "./types";
 import { GitLabApiRoutes } from "./gitlab/api/gitlabApiRoutes.js";
+import type { BackgroundTaskRequest, BackgroundTaskResponse } from "./agent8/types/api.js";
 
 type WebSocketData = ProxyData | DirectConnectionData;
 
@@ -362,7 +363,7 @@ export class ContainerServer {
             }
 
             try {
-              const body = await req.json();
+              const body = await req.json() as BackgroundTaskRequest;
 
               // Validate required fields
               if (!body.targetServerUrl) {
@@ -402,6 +403,7 @@ export class ContainerServer {
                 promptId: body.promptId || "agent8",
                 contextOptimization: body.contextOptimization ?? true,
                 cookies: cookieHeader || undefined,
+                gitlabInfo: body.gitlabInfo,
               });
 
               return Response.json({

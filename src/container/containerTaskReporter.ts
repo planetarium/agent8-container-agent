@@ -8,14 +8,10 @@ import { Agent8Client } from '../agent8';
 import type { ContainerServer } from '../server';
 import { ensureSafePath } from '../server';
 
-export interface GitLabInfo {
-  projectId: number;
-  issueIid: number;
-  issueUrl: string;
-  issueTitle: string;
-  issueAuthor: string;
-  containerId: string;
-}
+import type { GitLabInfo } from '../gitlab/types/api.js';
+import type { TaskExecutionResult } from '../agent8/types/api.js';
+
+export type { GitLabInfo };
 
 export interface TaskPayload {
   targetServerUrl: string;
@@ -26,14 +22,7 @@ export interface TaskPayload {
   gitlabInfo: GitLabInfo;
 }
 
-export interface TaskResult {
-  success: boolean;
-  executedActions: number;
-  failedActions: number;
-  artifacts: any[];
-  textChunks: string;
-  error?: string;
-}
+export type TaskResult = TaskExecutionResult;
 
 export class ContainerTaskReporter {
   private gitlabToken: string | undefined;

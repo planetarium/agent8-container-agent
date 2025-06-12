@@ -148,7 +148,36 @@ export class Agent8Client {
       filesCount: request.files ? Object.keys(request.files).length : 0,
       promptId: request.promptId,
       contextOptimization: request.contextOptimization,
+      hasGitlabInfo: !!request.gitlabInfo,
     });
+
+    // Handle GitLab git checkout if GitLab info is provided
+    if (request.gitlabInfo && this.gitlabGitService) {
+      console.log(`[Agent8] GitLab info provided, performing git checkout for issue #${request.gitlabInfo.issueIid}`);
+      try {
+        const gitResult = await this.gitlabGitService.checkoutRepositoryForIssue(
+          request.gitlabInfo.projectId,
+          request.gitlabInfo.issueIid
+        );
+        console.log(`[Agent8] Git checkout completed:`, {
+          success: gitResult.success,
+          clonedRepository: gitResult.clonedRepository,
+          createdBranch: gitResult.createdBranch,
+          hasMergeRequest: !!gitResult.createdMergeRequest,
+        });
+        if (gitResult.createdMergeRequest) {
+          console.log(`[Agent8] Draft MR created: ${gitResult.createdMergeRequest.web_url}`);
+        }
+      } catch (error) {
+        console.error(`[Agent8] Git checkout failed:`, error);
+        // Continue with task execution even if git checkout fails
+      }
+    } else if (request.gitlabInfo) {
+      console.log(`[Agent8] GitLab info provided but GitLabGitService not available`);
+    } else {
+      console.log(`[Agent8] No GitLab issue info provided, skipping git checkout`);
+      console.log(`[Agent8] Note: In production, these are set automatically by GitLabContainerService`);
+    }
 
     const chatRequest: ChatRequest = {
       userId: request.userId,
@@ -625,36 +654,17 @@ export class Agent8Client {
   }
 
   private async initializeGitWorkspace(workdir: string): Promise<void> {
-    // Check if GitLab environment is configured
-    if (!process.env.GITLAB_URL || !process.env.GITLAB_TOKEN) {
-      console.log('[Agent8] GitLab not configured, skipping git checkout');
-      return;
-    }
-
-    const projectId = parseInt(process.env.GITLAB_PROJECT_ID || '0');
-    const issueIid = parseInt(process.env.GITLAB_ISSUE_IID || '0');
-
-    if (!projectId || !issueIid) {
-      console.log('[Agent8] No GitLab issue info provided, skipping git checkout');
-      return;
-    }
-
-    try {
+    // Initialize GitLab Git Service if GitLab is configured
+    if (process.env.GITLAB_URL && process.env.GITLAB_TOKEN) {
       console.log(`[Agent8] Initializing GitLab git service`);
       const gitlabClient = new GitLabClient(process.env.GITLAB_URL, process.env.GITLAB_TOKEN);
       (this as any).gitlabGitService = new GitLabGitService(gitlabClient, workdir);
-
-      console.log(`[Agent8] Starting git checkout for project ${projectId}, issue #${issueIid}`);
-      const result = await (this as any).gitlabGitService.checkoutRepositoryForIssue(projectId, issueIid);
-
-      if (result.success) {
-        console.log(`[Agent8] Git workspace initialized successfully`);
-        console.log(`[Agent8] Repository: ${result.clonedRepository}, Branch: ${result.createdBranch}`);
-      } else {
-        console.error(`[Agent8] Git workspace initialization failed: ${result.error}`);
-      }
-    } catch (error: any) {
-      console.error(`[Agent8] Git workspace initialization error: ${error instanceof Error ? error.message : String(error)}`);
+      console.log(`[Agent8] GitLab git service initialized`);
+    } else {
+      console.log('[Agent8] GitLab not configured, GitLab git service unavailable');
     }
+
+    // Note: Git checkout is now handled per-task when GitLab info is provided via HTTP API
+    // This eliminates the need for environment variables GITLAB_PROJECT_ID and GITLAB_ISSUE_IID
   }
 }

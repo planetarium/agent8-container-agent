@@ -257,25 +257,13 @@ ${containerId ? `**Manual Access**: [View Container](${containerUrl})` : ''}
   }
 
   private async configureContainerForGitLab(containerId: string, issue: GitLabIssue): Promise<void> {
-    // This method would ideally update container environment variables
-    // For now, we'll store the mapping for future reference
-    console.log(`[GitLab-Container] Configured container ${containerId} for GitLab issue #${issue.iid}`);
+    // Container configuration is now handled via HTTP API task delegation
+    // GitLab information is passed directly through the /api/background-task endpoint
+    console.log(`[GitLab-Container] Container ${containerId} configured for GitLab issue #${issue.iid}`);
+    console.log(`[GitLab-Container] GitLab info will be passed via HTTP API during task delegation`);
 
-    // Environment variables that would be set:
-    const gitlabEnv = {
-      GITLAB_ISSUE_ID: issue.id.toString(),
-      GITLAB_ISSUE_IID: issue.iid.toString(),
-      GITLAB_PROJECT_ID: issue.project_id.toString(),
-      GITLAB_ISSUE_TITLE: issue.title,
-      GITLAB_ISSUE_URL: issue.web_url,
-      GITLAB_ISSUE_LABELS: issue.labels.join(','),
-      GITLAB_ISSUE_AUTHOR: issue.author.username,
-      TRIGGER_SOURCE: 'gitlab-poller',
-      CREATED_BY: 'auto-trigger',
-    };
-
-    // NOTE: Actual environment variable setting would require
-    // additional Fly.io API calls or restart mechanisms
+    // Note: Environment variables are no longer needed as GitLab info is passed via HTTP API
+    // This eliminates the complexity of dynamic environment variable management
   }
 
   private async sendWebhookNotification(issue: GitLabIssue, containerId: string): Promise<void> {

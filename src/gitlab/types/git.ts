@@ -8,6 +8,7 @@ export interface GitCheckoutResult {
   success: boolean;
   clonedRepository: string;
   createdBranch: string;
+  createdMergeRequest?: GitLabMergeRequest;
   error?: string;
 }
 
@@ -22,4 +23,33 @@ export interface GitBranchInfo {
   name: string;
   baseBranch: string;
   created: boolean;
+}
+
+export interface MergeRequestCreationOptions {
+  projectId: number;
+  sourceBranch: string;
+  targetBranch: string;
+  title: string;
+  description: string;
+  issueIid: number;
+}
+
+export interface MergeRequestCreationResult {
+  success: boolean;
+  mergeRequest?: GitLabMergeRequest;
+  error?: string;
+}
+
+export interface GitLabMergeRequest {
+  id: number;
+  iid: number;
+  project_id: number;
+  title: string;
+  description: string;
+  state: 'opened' | 'closed' | 'merged';
+  draft: boolean;
+  source_branch: string;
+  target_branch: string;
+  web_url: string;
+  created_at: string;
 }

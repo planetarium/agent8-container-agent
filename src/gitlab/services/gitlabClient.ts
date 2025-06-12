@@ -1,5 +1,6 @@
 import { Gitlab } from '@gitbeaker/rest';
 import { GitLabIssue } from '../types/index.js';
+import type { MergeRequestCreationOptions, GitLabMergeRequest } from '../types/git.js';
 
 export class GitLabClient {
   private gitlab: InstanceType<typeof Gitlab>;
@@ -103,6 +104,31 @@ export class GitLabClient {
       return issue as GitLabIssue;
     } catch (error) {
       console.error(`[GitLab] Failed to fetch issue #${issueIid} from project ${projectId}:`, error);
+      throw error;
+    }
+  }
+
+  async createMergeRequest(options: MergeRequestCreationOptions): Promise<GitLabMergeRequest> {
+    try {
+      console.log(`[GitLab-API] Creating merge request: ${options.sourceBranch} -> ${options.targetBranch}`);
+
+      const mergeRequest = await this.gitlab.MergeRequests.create(
+        options.projectId,
+        options.sourceBranch,
+        options.targetBranch,
+        options.title,
+        {
+          description: options.description,
+          removeSourceBranch: true,
+          squash: false,
+          allowCollaboration: true,
+        }
+      );
+
+      console.log(`[GitLab-API] Merge request created successfully: !${mergeRequest.iid}`);
+      return mergeRequest as GitLabMergeRequest;
+    } catch (error) {
+      console.error(`[GitLab-API] Failed to create merge request:`, error);
       throw error;
     }
   }
