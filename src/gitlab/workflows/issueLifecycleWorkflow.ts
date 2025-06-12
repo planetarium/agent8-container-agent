@@ -8,10 +8,21 @@ import {
   LIFECYCLE_LABELS
 } from '../types/index.js';
 
+// Issue completion event type definition
+export interface IssueCompletionEvent {
+  issue: GitLabIssue;
+  containerId: string;
+  timestamp: Date;
+}
+
+// Event listener type definition
+export type IssueCompletionListener = (event: IssueCompletionEvent) => Promise<void>;
+
 export class IssueLifecycleWorkflow {
   private labelService: GitLabLabelService;
   private issueRepository: GitLabIssueRepository;
   private retryStates: Map<number, IssueRetryState> = new Map();
+  private issueCompletionListeners: Set<IssueCompletionListener> = new Set();
 
   constructor(
     labelService: GitLabLabelService,
@@ -19,6 +30,22 @@ export class IssueLifecycleWorkflow {
   ) {
     this.labelService = labelService;
     this.issueRepository = issueRepository;
+  }
+
+  /**
+   * Register issue completion event listener
+   */
+  public onIssueCompletion(listener: IssueCompletionListener): void {
+    this.issueCompletionListeners.add(listener);
+    console.log(`[Lifecycle] Issue completion listener registered (total: ${this.issueCompletionListeners.size})`);
+  }
+
+  /**
+   * Remove issue completion event listener
+   */
+  public offIssueCompletion(listener: IssueCompletionListener): void {
+    this.issueCompletionListeners.delete(listener);
+    console.log(`[Lifecycle] Issue completion listener removed (remaining: ${this.issueCompletionListeners.size})`);
   }
 
   async onContainerCreationStart(issue: GitLabIssue): Promise<void> {
@@ -105,7 +132,7 @@ export class IssueLifecycleWorkflow {
 
     if (previousLifecycleLabel === 'CONFIRM NEEDED' && currentLifecycleLabel === 'DONE') {
       console.log(`[Lifecycle] Issue #${issue.iid} confirmed as DONE by external system`);
-      await this.onIssueCompletion(issue);
+      await this.handleIssueCompletion(issue);
     }
 
     if (previousLifecycleLabel === 'REJECT' && currentLifecycleLabel === 'TODO') {
@@ -121,11 +148,45 @@ export class IssueLifecycleWorkflow {
     );
   }
 
-  private async onIssueCompletion(issue: GitLabIssue): Promise<void> {
+  private async handleIssueCompletion(issue: GitLabIssue): Promise<void> {
     const issueRecord = await this.issueRepository.findByGitLabIssueId(issue.id);
     if (issueRecord?.container_id) {
-      console.log(`[Lifecycle] Issue #${issue.iid} completed, container ${issueRecord.container_id} can be cleaned up`);
+      console.log(`[Lifecycle] Issue #${issue.iid} completed, notifying listeners for container ${issueRecord.container_id}`);
+
+      // Publish event
+      const event: IssueCompletionEvent = {
+        issue,
+        containerId: issueRecord.container_id,
+        timestamp: new Date()
+      };
+
+      await this.notifyIssueCompletionListeners(event);
+
+      console.log(`[Lifecycle] Issue #${issue.iid} completion event processed, container ${issueRecord.container_id} can be cleaned up`);
     }
+  }
+
+  /**
+   * Notify all issue completion listeners about the event
+   */
+  private async notifyIssueCompletionListeners(event: IssueCompletionEvent): Promise<void> {
+    if (this.issueCompletionListeners.size === 0) {
+      console.log(`[Lifecycle] No listeners registered for issue completion event`);
+      return;
+    }
+
+    console.log(`[Lifecycle] Notifying ${this.issueCompletionListeners.size} listeners about issue #${event.issue.iid} completion`);
+
+    const promises = Array.from(this.issueCompletionListeners).map(async (listener) => {
+      try {
+        await listener(event);
+      } catch (error) {
+        console.error(`[Lifecycle] Error in issue completion listener:`, error);
+      }
+    });
+
+    await Promise.all(promises);
+    console.log(`[Lifecycle] All listeners notified for issue #${event.issue.iid}`);
   }
 
   private getOrCreateRetryState(issue: GitLabIssue): IssueRetryState {

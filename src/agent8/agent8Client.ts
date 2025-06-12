@@ -16,6 +16,14 @@ import type {
 import { ActionRunner, StreamingMessageParser } from "./index";
 import { GitLabClient } from '../gitlab/services/gitlabClient.js';
 import { GitLabGitService } from '../gitlab/services/gitlabGitService.js';
+import { GitLabLabelService } from '../gitlab/services/gitlabLabelService.js';
+import { GitLabIssueRepository } from '../gitlab/repositories/gitlabIssueRepository.js';
+import { IssueLifecycleWorkflow } from '../gitlab/workflows/issueLifecycleWorkflow.js';
+import type { GitLabInfo } from '../gitlab/types/api.js';
+import type { GitLabIssue, GitLabComment, IssueState } from '../gitlab/types/index.js';
+import type { LabelChangeEvent } from '../gitlab/types/lifecycle.js';
+import type { GitCommitPushResult, GitCommitResult } from '../gitlab/types/git.js';
+import type { IssueCompletionEvent } from '../gitlab/workflows/issueLifecycleWorkflow.js';
 
 interface FileMap {
   [key: string]: {
@@ -34,6 +42,7 @@ interface ChatRequest {
   files?: FileMap;
   promptId?: string;
   contextOptimization: boolean;
+  gitlabInfo?: GitLabInfo;
 }
 
 interface Task {
@@ -100,10 +109,23 @@ class MessageConverter {
 export class Agent8Client {
   private tasks: Map<string, Task> = new Map();
   private readonly actionRunner: ActionRunner;
-  private readonly gitlabGitService?: GitLabGitService;
+  private readonly gitlabGitService: GitLabGitService;
+  private readonly gitlabClient: GitLabClient;
+  private readonly lifecycleWorkflow: IssueLifecycleWorkflow;
+  private issuePollingInterval: NodeJS.Timeout | null = null;
+  private currentGitLabInfo: GitLabInfo | null = null;
+  private previousIssueState: IssueState | null = null;
+  private readonly POLLING_INTERVAL = 30000; // 30 seconds
 
   constructor(containerServer: ContainerServer, workdir: string) {
     console.log(`[Agent8] Initializing - workdir: ${workdir}`);
+
+    // Validate GitLab configuration
+    if (!process.env.GITLAB_URL || !process.env.GITLAB_TOKEN) {
+      throw new Error(
+        'GitLab configuration required: GITLAB_URL and GITLAB_TOKEN environment variables must be set'
+      );
+    }
 
     // Create ActionRunner with callbacks for progress tracking
     const actionCallbacks: ActionCallbacks = {
@@ -129,11 +151,25 @@ export class Agent8Client {
     this.actionRunner = new ActionRunner(containerServer, workdir, actionCallbacks);
     console.log(`[Agent8] ActionRunner initialization completed`);
 
-    // Initialize GitLab Git workspace (non-blocking)
-    this.initializeGitWorkspace(workdir).catch((error) => {
-      console.error('[Agent8] Git workspace initialization failed:', error.message);
-      // Agent8Client continues running even if git checkout fails
-    });
+    // Initialize GitLab services (required)
+    console.log(`[Agent8] Initializing GitLab services`);
+    this.gitlabClient = new GitLabClient(process.env.GITLAB_URL, process.env.GITLAB_TOKEN);
+    this.gitlabGitService = new GitLabGitService(this.gitlabClient, workdir);
+
+    // Initialize lifecycle workflow dependencies
+    const gitlabIssueRepository = new GitLabIssueRepository();
+    const gitlabLabelService = new GitLabLabelService(this.gitlabClient, gitlabIssueRepository);
+
+    // Initialize IssueLifecycleWorkflow with proper dependencies
+    this.lifecycleWorkflow = new IssueLifecycleWorkflow(
+      gitlabLabelService,
+      gitlabIssueRepository
+    );
+
+    // Register issue completion event listener
+    this.lifecycleWorkflow.onIssueCompletion(this.handleIssueCompletionEvent.bind(this));
+
+    console.log(`[Agent8] GitLab services and lifecycle workflow initialized`);
   }
 
   async createTask(request: any): Promise<string> {
@@ -152,8 +188,13 @@ export class Agent8Client {
     });
 
     // Handle GitLab git checkout if GitLab info is provided
-    if (request.gitlabInfo && this.gitlabGitService) {
+    if (request.gitlabInfo) {
       console.log(`[Agent8] GitLab info provided, performing git checkout for issue #${request.gitlabInfo.issueIid}`);
+
+      // Start issue monitoring
+      console.log(`[Agent8] Starting issue monitoring for issue #${request.gitlabInfo.issueIid}`);
+      await this.startIssueMonitoring(request.gitlabInfo);
+
       try {
         const gitResult = await this.gitlabGitService.checkoutRepositoryForIssue(
           request.gitlabInfo.projectId,
@@ -172,8 +213,6 @@ export class Agent8Client {
         console.error(`[Agent8] Git checkout failed:`, error);
         // Continue with task execution even if git checkout fails
       }
-    } else if (request.gitlabInfo) {
-      console.log(`[Agent8] GitLab info provided but GitLabGitService not available`);
     } else {
       console.log(`[Agent8] No GitLab issue info provided, skipping git checkout`);
       console.log(`[Agent8] Note: In production, these are set automatically by GitLabContainerService`);
@@ -188,6 +227,7 @@ export class Agent8Client {
       files: request.files,
       promptId: request.promptId,
       contextOptimization: request.contextOptimization,
+      gitlabInfo: request.gitlabInfo,
     };
 
     const task: Task = {
@@ -232,7 +272,7 @@ export class Agent8Client {
       // Step 3: Process response
       console.log(`[Agent8] Task ${taskId} - Step 3: Response processing started`);
       const processStartTime = Date.now();
-      const result = await this.processResponse(taskId, response);
+      const result = await this.processResponse(taskId, response, request);
       const processDuration = Date.now() - processStartTime;
       console.log(`[Agent8] Task ${taskId} - Response processing completed (took ${processDuration}ms)`);
 
@@ -361,7 +401,7 @@ export class Agent8Client {
     }
   }
 
-  private async processResponse(taskId: string, response: Response): Promise<any> {
+  private async processResponse(taskId: string, response: Response, request: ChatRequest): Promise<any> {
     const startTime = Date.now();
     console.log(`[Agent8] Task ${taskId} - Response processing started`);
 
@@ -458,6 +498,27 @@ export class Agent8Client {
           const currentProgress = 30 + (actionResults.length * progressIncrement);
           this.updateTaskStatus(taskId, "running", Math.min(currentProgress, 95));
 
+          // Check if this is the last action and trigger auto-commit/push
+          if (actionResults.length === actions.length) {
+            console.log(`[Agent8] Task ${taskId} - All actions completed, checking auto-commit conditions`);
+
+            const allActionsSuccessful = actionResults.every(r => r.success);
+
+            if (request.gitlabInfo && this.gitlabGitService) {
+              if (allActionsSuccessful) {
+                console.log(`[Agent8] Task ${taskId} - Auto-commit triggered (all actions successful)`);
+                await this.performAutoCommitPush(taskId, request.gitlabInfo);
+              } else {
+                console.log(`[Agent8] Task ${taskId} - Some actions failed, skipping auto-commit`);
+                await this.handleActionFailure(taskId, request.gitlabInfo, actionResults);
+              }
+            } else if (request.gitlabInfo) {
+              console.log(`[Agent8] Task ${taskId} - GitLab info provided but GitLabGitService not available`);
+            } else {
+              console.log(`[Agent8] Task ${taskId} - No GitLab info provided, skipping auto-commit`);
+            }
+          }
+
         } catch (error: any) {
           const actionDuration = Date.now() - actionStartTime;
           const errorResult: ActionResult = {
@@ -470,6 +531,12 @@ export class Agent8Client {
             error: error instanceof Error ? error.message : String(error),
             stack: error instanceof Error ? error.stack : "No stack info",
           });
+
+          // Check if this is the last action and handle failure
+          if (actionResults.length === actions.length && request.gitlabInfo) {
+            console.log(`[Agent8] Task ${taskId} - All actions completed with failures`);
+            await this.handleActionFailure(taskId, request.gitlabInfo, actionResults);
+          }
         }
       },
     };
@@ -653,18 +720,457 @@ export class Agent8Client {
     return activeTasks;
   }
 
-  private async initializeGitWorkspace(workdir: string): Promise<void> {
-    // Initialize GitLab Git Service if GitLab is configured
-    if (process.env.GITLAB_URL && process.env.GITLAB_TOKEN) {
-      console.log(`[Agent8] Initializing GitLab git service`);
-      const gitlabClient = new GitLabClient(process.env.GITLAB_URL, process.env.GITLAB_TOKEN);
-      (this as any).gitlabGitService = new GitLabGitService(gitlabClient, workdir);
-      console.log(`[Agent8] GitLab git service initialized`);
-    } else {
-      console.log('[Agent8] GitLab not configured, GitLab git service unavailable');
+  /**
+   * Force complete a task when issue is marked as DONE
+   */
+  public forceCompleteTask(taskId: string, reason: string): void {
+    const task = this.tasks.get(taskId);
+    if (!task) {
+      console.warn(`[Agent8] Attempted to force complete task but task not found: ${taskId}`);
+      return;
     }
 
-    // Note: Git checkout is now handled per-task when GitLab info is provided via HTTP API
-    // This eliminates the need for environment variables GITLAB_PROJECT_ID and GITLAB_ISSUE_IID
+    if (task.status === 'completed' || task.status === 'failed') {
+      console.log(`[Agent8] Task ${taskId} already in final state: ${task.status}`);
+      return;
+    }
+
+    console.log(`[Agent8] Force completing task ${taskId}: ${reason}`);
+
+    const completionResult = {
+      forcedCompletion: true,
+      reason: reason,
+      originalStatus: task.status,
+      originalProgress: task.progress,
+      timestamp: new Date().toISOString()
+    };
+
+    this.updateTaskStatus(taskId, "completed", 100, undefined, completionResult);
+    console.log(`[Agent8] Task ${taskId} force completed due to: ${reason}`);
+  }
+
+  /**
+   * Execute automatic commit and push after successful action completion
+   */
+  private async performAutoCommitPush(taskId: string, gitlabInfo: GitLabInfo): Promise<void> {
+    try {
+      console.log(`[Agent8] Task ${taskId} - Auto-commit started for issue #${gitlabInfo.issueIid}`);
+
+
+
+      const commitMessage = this.generateCommitMessage(gitlabInfo);
+      console.log(`[Agent8] Task ${taskId} - Commit message prepared (length: ${commitMessage.length})`);
+      console.log(`[Agent8] Task ${taskId} - Commit title: ${gitlabInfo.issueTitle}`);
+
+      const commitPushResult = await this.gitlabGitService.commitAndPush(commitMessage);
+
+      if (commitPushResult.success) {
+        console.log(`[Agent8] Task ${taskId} - Auto-commit/push completed successfully`);
+
+        if (commitPushResult.commitResult.commitHash) {
+          console.log(`[Agent8] Task ${taskId} - Commit hash: ${commitPushResult.commitResult.commitHash}`);
+        }
+
+        if (commitPushResult.pushResult.pushedBranch) {
+          console.log(`[Agent8] Task ${taskId} - Pushed to branch: ${commitPushResult.pushResult.pushedBranch}`);
+        }
+
+        // Handle task success: add success comment and update issue status
+        await this.handleTaskSuccess(taskId, gitlabInfo, commitPushResult);
+      } else {
+        // Determine the specific failure type for better error handling
+        if (commitPushResult.commitResult.success && !commitPushResult.pushResult.success) {
+          // Commit succeeded but push failed
+          const pushError = new Error(`Push failed: ${commitPushResult.pushResult.error}`);
+          await this.handleCommitPushFailure(taskId, gitlabInfo, pushError, commitPushResult.commitResult);
+        } else {
+          // Commit failed
+          const commitError = new Error(`Commit failed: ${commitPushResult.commitResult.error || commitPushResult.error}`);
+          await this.handleCommitPushFailure(taskId, gitlabInfo, commitError);
+        }
+        return; // Don't throw, we've handled the error
+      }
+    } catch (error) {
+      console.error(`[Agent8] Task ${taskId} - Auto-commit/push failed:`, error);
+      await this.handleCommitPushFailure(taskId, gitlabInfo, error as Error);
+    }
+  }
+
+  /**
+   * Handle action execution failures by logging and preparing for REJECT state
+   */
+  private async handleActionFailure(taskId: string, gitlabInfo: GitLabInfo, actionResults: ActionResult[]): Promise<void> {
+    try {
+      const failedActions = actionResults.filter(r => !r.success);
+      const successfulActions = actionResults.filter(r => r.success);
+
+      console.log(`[Agent8] Task ${taskId} - Action execution failed:`, {
+        totalActions: actionResults.length,
+        successful: successfulActions.length,
+        failed: failedActions.length
+      });
+
+      const errorComment = this.generateErrorComment('action_failure', {
+        timestamp: new Date().toISOString(),
+        failedActions: failedActions.map(r => ({
+          error: r.error,
+        })),
+        successfulActions: successfulActions.length,
+        failedActionsCount: failedActions.length,
+        containerId: gitlabInfo.containerId
+      });
+
+      console.log(`[Agent8] Task ${taskId} - Action failure comment prepared:`, errorComment.substring(0, 100) + '...');
+
+      // Add error comment to GitLab issue
+      await this.addIssueErrorComment(gitlabInfo, errorComment);
+
+      // Update issue status to REJECT (Phase 5 implementation)
+      const issue = await this.getGitLabIssue(gitlabInfo.projectId, gitlabInfo.issueIid);
+      if (issue) {
+        const errorMessage = `Agent8 actions failed: ${failedActions.length}/${actionResults.length} actions failed`;
+        await this.lifecycleWorkflow.onTaskExecutionFailure(issue, new Error(errorMessage));
+        console.log(`[Agent8] Task ${taskId} - Issue status updated to REJECT due to action failures`);
+      }
+
+    } catch (error) {
+      console.error(`[Agent8] Task ${taskId} - Failed to handle action failure:`, error);
+    }
+  }
+
+  /**
+   * Handle commit/push failures by logging and preparing for REJECT state
+   */
+  private async handleCommitPushFailure(taskId: string, gitlabInfo: GitLabInfo, error: Error, commitResult?: GitCommitResult): Promise<void> {
+    try {
+      console.error(`[Agent8] Task ${taskId} - Commit/Push failed:`, error.message);
+
+      // Determine error type based on whether commit succeeded
+      const errorType = commitResult?.success ? 'push_failure' : 'commit_failure';
+
+      const errorComment = this.generateErrorComment(errorType, {
+        timestamp: new Date().toISOString(),
+        errorMessage: error.message,
+        commitHash: commitResult?.commitHash,
+        containerId: gitlabInfo.containerId
+      });
+
+      console.log(`[Agent8] Task ${taskId} - ${errorType === 'push_failure' ? 'Push' : 'Commit'} failure comment prepared:`, errorComment.substring(0, 100) + '...');
+
+      // Add error comment to GitLab issue
+      await this.addIssueErrorComment(gitlabInfo, errorComment);
+
+      // Update issue status to REJECT (Phase 5 implementation)
+      const issue = await this.getGitLabIssue(gitlabInfo.projectId, gitlabInfo.issueIid);
+      if (issue) {
+        await this.lifecycleWorkflow.onTaskExecutionFailure(issue, error);
+        console.log(`[Agent8] Task ${taskId} - Issue status updated to REJECT due to ${errorType === 'push_failure' ? 'push' : 'commit'} failure`);
+      }
+
+    } catch (handlingError) {
+      console.error(`[Agent8] Task ${taskId} - Failed to handle commit/push failure:`, handlingError);
+    }
+  }
+
+  /**
+   * Generate commit message based on GitLab issue information
+   */
+  private generateCommitMessage(gitlabInfo: GitLabInfo): string {
+    const title = gitlabInfo.issueTitle;
+    const description = gitlabInfo.issueDescription;
+
+    if (!description || description.trim() === '') {
+      return title;
+    }
+
+    return `${title}\n\n${description}`;
+  }
+
+  /**
+   * Generate error comment templates for different failure types
+   */
+  private generateErrorComment(errorType: 'action_failure' | 'commit_failure' | 'push_failure', details: any): string {
+    const timestamp = details.timestamp || new Date().toISOString();
+    const containerId = details.containerId || 'unknown';
+
+    switch (errorType) {
+      case 'action_failure':
+        return `## ❌ Agent8 Action Execution Failed
+
+**Error Type**: Action execution failure
+**Timestamp**: ${timestamp}
+**Failed Actions**: ${details.failedActionsCount}/${details.failedActionsCount + details.successfulActions}
+
+**Execution Statistics**:
+- Successful actions: ${details.successfulActions}
+- Failed actions: ${details.failedActionsCount}
+
+**Resolution Steps**:
+1. Review issue description for clarity
+2. Check for missing files or dependencies
+3. Change issue state back to TODO to retry
+
+**Container**: \`${containerId}\``;
+
+      case 'commit_failure':
+        return `## ❌ Auto-Commit Failed
+
+**Error Type**: Git commit failure
+**Timestamp**: ${timestamp}
+**Error Message**: ${details.errorMessage}
+
+**Resolution Steps**:
+1. Check Git configuration (user.name, user.email)
+2. Verify working directory permissions
+3. Change issue state back to TODO to retry
+
+**Container**: \`${containerId}\``;
+
+      case 'push_failure':
+        return `## ❌ Auto-Push Failed
+
+**Error Type**: Git push failure
+**Timestamp**: ${timestamp}
+**Error Message**: ${details.errorMessage}
+**Commit Hash**: \`${details.commitHash || 'N/A'}\`
+
+**Changes were committed locally but failed to push to remote.**
+
+**Resolution Steps**:
+1. Verify GitLab token permissions (write_repository)
+2. Check network connectivity
+3. Change issue state back to TODO to retry
+
+**Container**: \`${containerId}\``;
+
+      default:
+        return `## ❌ Unknown Error
+
+**Timestamp**: ${timestamp}
+**Container**: \`${containerId}\``;
+    }
+  }
+
+  /**
+   * Handle task success: add success comment and update issue status to CONFIRM NEEDED
+   */
+  private async handleTaskSuccess(
+    taskId: string,
+    gitlabInfo: GitLabInfo,
+    commitResult: GitCommitPushResult
+  ): Promise<void> {
+    try {
+      console.log(`[Agent8] Task ${taskId} - Task completed successfully, updating issue status`);
+
+      // Generate success comment
+      const successComment = this.generateSuccessComment(gitlabInfo, commitResult);
+
+      // Update issue status to CONFIRM NEEDED (Phase 5 implementation)
+      const issue = await this.getGitLabIssue(gitlabInfo.projectId, gitlabInfo.issueIid);
+      if (issue) {
+        await this.lifecycleWorkflow.onTaskCompletion(issue, {
+          containerId: gitlabInfo.containerId,
+          commitHash: commitResult.commitResult.commitHash,
+          pushedBranch: commitResult.pushResult.pushedBranch
+        });
+      }
+
+      // Add success comment to GitLab issue
+      await this.addIssueSuccessComment(gitlabInfo, successComment);
+
+      console.log(`[Agent8] Task ${taskId} - Issue status updated to CONFIRM NEEDED`);
+
+    } catch (error) {
+      console.error(`[Agent8] Task ${taskId} - Failed to handle task success:`, error);
+      // Do not convert to error state since the actual work was successful
+    }
+  }
+
+  /**
+   * Generate success comment template
+   */
+  private generateSuccessComment(
+    gitlabInfo: GitLabInfo,
+    commitResult: GitCommitPushResult
+  ): string {
+    const commitInfo = commitResult.commitResult.commitHash
+      ? `\n**Commit Hash:** \`${commitResult.commitResult.commitHash}\``
+      : '';
+
+    const branchInfo = commitResult.pushResult.pushedBranch
+      ? `\n**Branch:** \`${commitResult.pushResult.pushedBranch}\``
+      : '';
+
+    return `## ✅ Agent8 Task Completed
+
+**Status:** Task completed successfully
+**Completion Time:** ${new Date().toISOString()}
+**Container:** \`${gitlabInfo.containerId}\`${commitInfo}${branchInfo}
+
+**Next Steps:**
+Please review the task results and change the issue status to **DONE** if everything looks correct.
+
+---
+*Agent8 automatic task completion notification*`;
+  }
+
+  /**
+   * Add success comment to GitLab issue
+   */
+  private async addIssueSuccessComment(gitlabInfo: GitLabInfo, comment: string): Promise<void> {
+    try {
+      await this.gitlabClient.addIssueComment(gitlabInfo.projectId, gitlabInfo.issueIid, comment);
+      console.log(`[Agent8] Success comment added to issue #${gitlabInfo.issueIid}`);
+    } catch (error) {
+      console.error(`[Agent8] Failed to add success comment to issue #${gitlabInfo.issueIid}:`, error);
+    }
+  }
+
+  /**
+   * Add error comment to GitLab issue
+   */
+  private async addIssueErrorComment(gitlabInfo: GitLabInfo, comment: string): Promise<void> {
+    try {
+      await this.gitlabClient.addIssueComment(gitlabInfo.projectId, gitlabInfo.issueIid, comment);
+      console.log(`[Agent8] Error comment added to issue #${gitlabInfo.issueIid}`);
+    } catch (error) {
+      console.error(`[Agent8] Failed to add error comment to issue #${gitlabInfo.issueIid}:`, error);
+    }
+  }
+
+  /**
+   * Get GitLab issue by project ID and issue IID
+   */
+  private async getGitLabIssue(projectId: number, issueIid: number): Promise<GitLabIssue | null> {
+    try {
+      return await this.gitlabClient.getIssue(projectId, issueIid);
+    } catch (error) {
+      console.error(`[Agent8] Failed to fetch GitLab issue #${issueIid}:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Handle issue completion event - terminate related tasks
+   */
+  private async handleIssueCompletionEvent(event: IssueCompletionEvent): Promise<void> {
+    console.log(`[Agent8] Issue #${event.issue.iid} completed, stopping monitoring and cleaning up tasks`);
+
+    this.stopIssueMonitoring();
+
+    const activeTasks = this.getActiveTasksInfo();
+    let terminatedCount = 0;
+
+    for (const task of activeTasks) {
+      if (task.status === 'pending' || task.status === 'running') {
+        this.forceCompleteTask(task.id, `Issue #${event.issue.iid} marked as DONE`);
+        terminatedCount++;
+      }
+    }
+
+    console.log(`[Agent8] Terminated ${terminatedCount} tasks for completed issue #${event.issue.iid}`);
+  }
+
+  private async startIssueMonitoring(gitlabInfo: GitLabInfo): Promise<void> {
+    this.stopIssueMonitoring();
+
+    this.currentGitLabInfo = gitlabInfo;
+    this.previousIssueState = await this.getCurrentIssueState(gitlabInfo);
+    console.log(`[Agent8] Initial issue state captured for #${gitlabInfo.issueIid}`);
+
+    this.issuePollingInterval = setInterval(async () => {
+      await this.checkIssueChanges();
+    }, this.POLLING_INTERVAL);
+
+    console.log(`[Agent8] Issue monitoring started for #${gitlabInfo.issueIid} (${this.POLLING_INTERVAL/1000}s interval)`);
+  }
+
+  private async getCurrentIssueState(gitlabInfo: GitLabInfo): Promise<IssueState> {
+    const issue = await this.gitlabClient.getIssue(gitlabInfo.projectId, gitlabInfo.issueIid);
+    const comments = await this.gitlabClient.getIssueComments(gitlabInfo.projectId, gitlabInfo.issueIid);
+
+    return {
+      labels: issue.labels || [],
+      lastCommentAt: comments.length > 0 ? comments[comments.length - 1].created_at : null,
+      commentCount: comments.length,
+      lastComment: comments.length > 0 ? comments[comments.length - 1] : null,
+      updatedAt: issue.updated_at
+    };
+  }
+
+  private async checkIssueChanges(): Promise<void> {
+    if (!this.currentGitLabInfo || !this.previousIssueState) return;
+
+    try {
+      const currentState = await this.getCurrentIssueState(this.currentGitLabInfo);
+
+      if (this.hasLabelChanged(this.previousIssueState, currentState)) {
+        await this.handleLabelChange(this.previousIssueState, currentState);
+      }
+
+      if (this.hasCommentChanged(this.previousIssueState, currentState)) {
+        await this.handleCommentChange(this.previousIssueState, currentState);
+      }
+
+      this.previousIssueState = currentState;
+
+    } catch (error) {
+      console.error(`[Agent8] Error checking issue changes:`, error);
+    }
+  }
+
+  private hasLabelChanged(previous: IssueState, current: IssueState): boolean {
+    return JSON.stringify(previous.labels.sort()) !== JSON.stringify(current.labels.sort());
+  }
+
+  private hasCommentChanged(previous: IssueState, current: IssueState): boolean {
+    return previous.commentCount !== current.commentCount ||
+           previous.lastCommentAt !== current.lastCommentAt;
+  }
+
+    private async handleLabelChange(previousState: IssueState, currentState: IssueState): Promise<void> {
+    console.log(`[Agent8] Label change detected: ${previousState.labels} → ${currentState.labels}`);
+
+    const issue = await this.gitlabClient.getIssue(
+      this.currentGitLabInfo!.projectId,
+      this.currentGitLabInfo!.issueIid
+    );
+
+    const labelChangeEvent: LabelChangeEvent = {
+      issue: issue,
+      previousLabels: previousState.labels,
+      currentLabels: currentState.labels,
+      changedAt: new Date(),
+      changeType: 'modified'
+    };
+
+    await this.lifecycleWorkflow.onLabelChange(labelChangeEvent);
+  }
+
+  private async handleCommentChange(previousState: IssueState, currentState: IssueState): Promise<void> {
+    if (!currentState.lastComment) return;
+
+    console.log(`[Agent8] New comment detected from ${currentState.lastComment.author.username}`);
+    console.log(`[Agent8] Comment preview: "${currentState.lastComment.body.substring(0, 100)}${currentState.lastComment.body.length > 100 ? '...' : ''}"`);
+
+    if (currentState.lastComment.system) {
+      console.log(`[Agent8] System comment detected, ignoring`);
+      return;
+    }
+
+    console.log(`[Agent8] User comment logged successfully`);
+  }
+
+  private stopIssueMonitoring(): void {
+    if (this.issuePollingInterval) {
+      clearInterval(this.issuePollingInterval);
+      this.issuePollingInterval = null;
+      console.log(`[Agent8] Issue monitoring stopped`);
+    }
+  }
+
+  public cleanup(): void {
+    this.stopIssueMonitoring();
+    console.log(`[Agent8] Client cleanup completed`);
   }
 }

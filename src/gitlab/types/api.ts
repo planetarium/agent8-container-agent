@@ -9,6 +9,7 @@ export interface GitLabInfo {
   issueIid: number;
   issueUrl: string;
   issueTitle: string;
+  issueDescription: string | null;
   issueAuthor: string;
   containerId: string;
 }

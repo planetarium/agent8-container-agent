@@ -1,11 +1,17 @@
 import { PrismaClient } from '@prisma/client';
 import { GitLabIssue, GitLabIssueRecord } from '../types/index.js';
+import { GitLabClient } from '../services/gitlabClient.js';
 
 export class GitLabIssueRepository {
   private prisma: PrismaClient;
+  private gitlabClient: GitLabClient;
 
-  constructor() {
+  constructor(gitlabClient?: GitLabClient) {
     this.prisma = new PrismaClient();
+    this.gitlabClient = gitlabClient || new GitLabClient(
+      process.env.GITLAB_URL || '',
+      process.env.GITLAB_TOKEN || ''
+    );
   }
 
   async getProcessedIssueIds(): Promise<Set<number>> {
@@ -81,28 +87,6 @@ export class GitLabIssueRepository {
       processed_at: issue.processed_at,
       container_id: issue.container_id
     };
-  }
-
-  async findIssuesByProjectId(projectId: number): Promise<GitLabIssueRecord[]> {
-    const issues = await this.prisma.gitlab_issues.findMany({
-      where: { project_id: projectId },
-      orderBy: { processed_at: 'desc' }
-    });
-
-    return issues.map(issue => ({
-      id: issue.id,
-      gitlab_issue_id: issue.gitlab_issue_id,
-      gitlab_iid: issue.gitlab_iid,
-      project_id: issue.project_id,
-      title: issue.title,
-      description: issue.description,
-      labels: issue.labels,
-      author_username: issue.author_username,
-      web_url: issue.web_url,
-      created_at: issue.created_at,
-      processed_at: issue.processed_at,
-      container_id: issue.container_id
-    }));
   }
 
   async findByGitLabIssueId(gitlabIssueId: number): Promise<GitLabIssueRecord | null> {

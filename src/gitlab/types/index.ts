@@ -113,6 +113,35 @@ export interface NotificationPayload {
   }>;
 }
 
+export interface GitLabComment {
+  id: number;
+  body: string;
+  author: {
+    id: number;
+    username: string;
+    name: string;
+  };
+  created_at: string;
+  updated_at: string;
+  system: boolean;
+}
+
+export interface IssueState {
+  labels: string[];
+  lastCommentAt: string | null;
+  commentCount: number;
+  lastComment: GitLabComment | null;
+  updatedAt: string;
+}
+
+export interface IssueChangeEvent {
+  issueIid: number;
+  changeType: 'label' | 'comment' | 'status';
+  previousState: IssueState;
+  currentState: IssueState;
+  timestamp: Date;
+}
+
 // Task Delegation Types
 export * from './taskDelegation.js';
 

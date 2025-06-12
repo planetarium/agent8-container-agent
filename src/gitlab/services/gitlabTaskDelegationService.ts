@@ -67,6 +67,7 @@ export class GitLabTaskDelegationService {
           issueIid: issue.iid,
           issueUrl: issue.web_url,
           issueTitle: issue.title,
+          issueDescription: issue.description,
           issueAuthor: issue.author.username,
           containerId: containerId
         }

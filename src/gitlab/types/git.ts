@@ -53,3 +53,24 @@ export interface GitLabMergeRequest {
   web_url: string;
   created_at: string;
 }
+
+// Commit and push related type definitions
+export interface GitCommitResult {
+  success: boolean;
+  commitHash?: string;
+  message?: string;
+  error?: string;
+}
+
+export interface GitPushResult {
+  success: boolean;
+  pushedBranch?: string;
+  error?: string;
+}
+
+export interface GitCommitPushResult {
+  success: boolean;
+  commitResult: GitCommitResult;
+  pushResult: GitPushResult;
+  error?: string;
+}

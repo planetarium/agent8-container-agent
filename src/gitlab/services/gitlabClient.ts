@@ -1,6 +1,7 @@
 import { Gitlab } from '@gitbeaker/rest';
 import { GitLabIssue } from '../types/index.js';
 import type { MergeRequestCreationOptions, GitLabMergeRequest } from '../types/git.js';
+import type { GitLabComment } from '../types/index.js';
 
 export class GitLabClient {
   private gitlab: InstanceType<typeof Gitlab>;
@@ -129,6 +130,27 @@ export class GitLabClient {
       return mergeRequest as GitLabMergeRequest;
     } catch (error) {
       console.error(`[GitLab-API] Failed to create merge request:`, error);
+      throw error;
+    }
+  }
+
+  async getIssueComments(projectId: number, issueIid: number): Promise<GitLabComment[]> {
+    try {
+      const url = `${this.baseUrl}/api/v4/projects/${projectId}/issues/${issueIid}/notes`;
+      const response = await fetch(url, {
+        headers: {
+          'PRIVATE-TOKEN': this.token
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const comments = await response.json() as GitLabComment[];
+      return comments.filter((comment: GitLabComment) => !comment.system);
+    } catch (error) {
+      console.error(`[GitLab] Failed to fetch comments for issue #${issueIid}:`, error);
       throw error;
     }
   }
