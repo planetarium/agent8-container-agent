@@ -41,6 +41,11 @@ export class GitLabTaskDelegationService {
     console.log(`[GitLab-Agent8] Starting task delegation for issue #${issue.iid} to container ${containerId}`);
 
     try {
+      // Validate required options
+      if (!options.targetServerUrl) {
+        throw new Error('targetServerUrl is required for task delegation');
+      }
+
       // Step 1: Convert GitLab issue to Agent8 messages
       const messages = this.convertIssueToMessages(issue);
       console.log(`[GitLab-Agent8] Converted issue to ${messages.length} messages`);
@@ -51,7 +56,7 @@ export class GitLabTaskDelegationService {
 
       // Step 3: Prepare task payload with GitLab info for autonomous reporting
       const payload = {
-        targetServerUrl: options.targetServerUrl || process.env.LLM_SERVER_URL || 'https://api.openai.com',
+        targetServerUrl: options.targetServerUrl,
         messages: messages,
         promptId: 'agent8',
         contextOptimization: options.contextOptimization ?? (process.env.GITLAB_CONTEXT_OPTIMIZATION === 'true'),

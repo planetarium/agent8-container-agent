@@ -183,7 +183,8 @@ export class GitLabContainerService {
         {
           timeout: 30000, // 30 second delegation timeout
           contextOptimization: true,
-          promptId: 'gitlab-agent8'
+          promptId: 'gitlab-agent8',
+          targetServerUrl: process.env.LLM_SERVER_URL
         }
       );
 
