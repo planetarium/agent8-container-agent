@@ -115,3 +115,6 @@ export interface NotificationPayload {
 
 // Task Delegation Types
 export * from './taskDelegation.js';
+
+// Lifecycle Management Types
+export * from './lifecycle.js';

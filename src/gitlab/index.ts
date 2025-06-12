@@ -2,9 +2,11 @@ export { GitLabPoller } from './services/gitlabPoller.js';
 export { GitLabClient } from './services/gitlabClient.js';
 export { GitLabContainerService } from './services/gitlabContainerService.js';
 export { GitLabTaskDelegationService } from './services/gitlabTaskDelegationService.js';
+export { GitLabLabelService } from './services/gitlabLabelService.js';
 export { GitLabIssueRepository } from './repositories/gitlabIssueRepository.js';
 export { ContainerTrigger } from './triggers/containerTrigger.js';
 export { GitLabApiRoutes } from './api/gitlabApiRoutes.js';
+export { IssueLifecycleWorkflow } from './workflows/issueLifecycleWorkflow.js';
 
 import { GitLabIssueRepository } from './repositories/gitlabIssueRepository.js';
 import { GitLabClient } from './services/gitlabClient.js';
@@ -19,7 +21,13 @@ export type {
   TaskDelegationResult,
   TaskStatusResult,
   AgentTask,
-  ApiResponse
+  ApiResponse,
+  LifecycleLabel,
+  LifecycleConfig,
+  LabelChangeEvent,
+  LifecycleTransition,
+  IssueRetryState,
+  LifecycleStats
 } from './types/index.js';
 
 // Health check utilities for system integration

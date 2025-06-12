@@ -105,6 +105,39 @@ export class GitLabIssueRepository {
     }));
   }
 
+  async findByGitLabIssueId(gitlabIssueId: number): Promise<GitLabIssueRecord | null> {
+    const issue = await this.prisma.gitlab_issues.findUnique({
+      where: { gitlab_issue_id: gitlabIssueId }
+    });
+
+    if (!issue) return null;
+
+    return {
+      id: issue.id,
+      gitlab_issue_id: issue.gitlab_issue_id,
+      gitlab_iid: issue.gitlab_iid,
+      project_id: issue.project_id,
+      title: issue.title,
+      description: issue.description,
+      labels: issue.labels,
+      author_username: issue.author_username,
+      web_url: issue.web_url,
+      created_at: issue.created_at,
+      processed_at: issue.processed_at,
+      container_id: issue.container_id
+    };
+  }
+
+  async updateIssueLabels(gitlabIssueId: number, labels: string[]): Promise<void> {
+    await this.prisma.gitlab_issues.update({
+      where: { gitlab_issue_id: gitlabIssueId },
+      data: {
+        labels: JSON.stringify(labels),
+        processed_at: new Date()
+      }
+    });
+  }
+
   async close(): Promise<void> {
     await this.prisma.$disconnect();
   }
