@@ -16,7 +16,15 @@ export class GitLabTaskDelegationService {
     this.issueRepository = issueRepository;
     this.gitlabClient = gitlabClient;
     this.routerDomain = routerDomain;
-    this.authToken = process.env.CONTAINER_AUTH_TOKEN;
+
+    // 🧪 테스트 모드: 환경변수에서 고정 토큰 사용
+    const useTestToken = process.env.USE_TEST_TOKEN?.toLowerCase() === 'true';
+    if (useTestToken && process.env.TEST_V8_ACCESS_TOKEN) {
+      this.authToken = process.env.TEST_V8_ACCESS_TOKEN;
+      console.log(`[GitLab-Agent8] 🧪 TEST MODE: Using fixed token for container authentication`);
+    } else {
+      this.authToken = process.env.CONTAINER_AUTH_TOKEN;
+    }
 
     console.log(`[GitLab-Agent8] TaskDelegationService initialized with domain: ${this.routerDomain}`);
   }
