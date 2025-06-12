@@ -37,6 +37,10 @@ export class GitLabApiRoutes {
         return await this.handleStats(corsHeaders);
       }
 
+      if (path === '/api/gitlab/lifecycle/stats' && method === 'GET') {
+        return await this.handleLifecycleStats(corsHeaders);
+      }
+
       if (path === '/api/gitlab/issues' && method === 'GET') {
         return await this.handleIssuesList(req, corsHeaders);
       }
@@ -91,6 +95,38 @@ export class GitLabApiRoutes {
     };
 
     return new Response(JSON.stringify(result), { headers: corsHeaders });
+  }
+
+  private async handleLifecycleStats(corsHeaders: Record<string, string>): Promise<Response> {
+    try {
+      const lifecycleStats = await this.issueRepository.getLifecycleStats();
+
+      const result = {
+        ...lifecycleStats,
+        lastUpdated: new Date().toISOString(),
+        summary: {
+          totalIssues: lifecycleStats.total,
+          completedIssues: lifecycleStats.byStatus['DONE'] || 0,
+          inProgressIssues: lifecycleStats.byStatus['WIP'] || 0,
+          pendingConfirmation: lifecycleStats.byStatus['CONFIRM NEEDED'] || 0,
+          rejectedIssues: lifecycleStats.byStatus['REJECT'] || 0,
+          todoIssues: lifecycleStats.byStatus['TODO'] || 0,
+          unlabledIssues: lifecycleStats.byStatus['NO_LABEL'] || 0,
+          completionRate: `${lifecycleStats.completionRate.toFixed(1)}%`
+        }
+      };
+
+      return new Response(JSON.stringify(result), { headers: corsHeaders });
+    } catch (error) {
+      console.error('[API] Error fetching lifecycle stats:', error);
+      return new Response(JSON.stringify({
+        error: 'Failed to fetch lifecycle statistics',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      }), {
+        status: 500,
+        headers: corsHeaders
+      });
+    }
   }
 
   private async handleIssuesList(req: Request, corsHeaders: Record<string, string>): Promise<Response> {

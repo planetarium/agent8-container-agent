@@ -105,6 +105,84 @@ export class GitLabIssueRepository {
     }));
   }
 
+  async findByGitLabIssueId(gitlabIssueId: number): Promise<GitLabIssueRecord | null> {
+    const issue = await this.prisma.gitlab_issues.findUnique({
+      where: { gitlab_issue_id: gitlabIssueId }
+    });
+
+    if (!issue) return null;
+
+    return {
+      id: issue.id,
+      gitlab_issue_id: issue.gitlab_issue_id,
+      gitlab_iid: issue.gitlab_iid,
+      project_id: issue.project_id,
+      title: issue.title,
+      description: issue.description,
+      labels: issue.labels,
+      author_username: issue.author_username,
+      web_url: issue.web_url,
+      created_at: issue.created_at,
+      processed_at: issue.processed_at,
+      container_id: issue.container_id
+    };
+  }
+
+  async updateIssueLabels(gitlabIssueId: number, labels: string[]): Promise<void> {
+    await this.prisma.gitlab_issues.update({
+      where: { gitlab_issue_id: gitlabIssueId },
+      data: {
+        labels: JSON.stringify(labels),
+        processed_at: new Date()
+      }
+    });
+  }
+
+  async getLifecycleStats(): Promise<{
+    total: number;
+    byStatus: Record<string, number>;
+    completionRate: number;
+  }> {
+    const issues = await this.prisma.gitlab_issues.findMany({
+      select: { labels: true }
+    });
+
+    const LIFECYCLE_LABELS = ['TODO', 'WIP', 'CONFIRM NEEDED', 'DONE', 'REJECT'];
+    const statusCounts: Record<string, number> = {};
+
+    LIFECYCLE_LABELS.forEach(label => {
+      statusCounts[label] = 0;
+    });
+    statusCounts['NO_LABEL'] = 0;
+
+    let completedCount = 0;
+
+    for (const issue of issues) {
+      const labels = JSON.parse(issue.labels) as string[];
+      const lifecycleLabel = labels.find(label =>
+        LIFECYCLE_LABELS.includes(label)
+      );
+
+      if (lifecycleLabel) {
+        statusCounts[lifecycleLabel]++;
+        if (lifecycleLabel === 'DONE') {
+          completedCount++;
+        }
+      } else {
+        statusCounts['NO_LABEL']++;
+      }
+    }
+
+    const total = issues.length;
+    const completionRate = total > 0 ? (completedCount / total) * 100 : 0;
+
+    return {
+      total,
+      byStatus: statusCounts,
+      completionRate
+    };
+  }
+
   async close(): Promise<void> {
     await this.prisma.$disconnect();
   }

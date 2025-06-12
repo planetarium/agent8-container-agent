@@ -3,6 +3,8 @@ import { GitLabIssue, ContainerCreationOptions } from '../types/index.js';
 import { GitLabIssueRepository } from '../repositories/gitlabIssueRepository.js';
 import { GitLabClient } from './gitlabClient.js';
 import { GitLabTaskDelegationService } from './gitlabTaskDelegationService.js';
+import { GitLabLabelService } from './gitlabLabelService.js';
+import { IssueLifecycleWorkflow } from '../workflows/issueLifecycleWorkflow.js';
 
 export class GitLabContainerService {
   private machinePool: MachinePool;
@@ -10,6 +12,8 @@ export class GitLabContainerService {
   private gitlabClient?: GitLabClient;
   private taskDelegationService: GitLabTaskDelegationService;
   private routerDomain: string;
+  private labelService?: GitLabLabelService;
+  private lifecycleWorkflow?: IssueLifecycleWorkflow;
 
   constructor(
     machinePool: MachinePool,
@@ -29,11 +33,22 @@ export class GitLabContainerService {
       routerDomain
     );
 
+    // Initialize lifecycle management services if GitLab client is available
+    if (gitlabClient) {
+      this.labelService = new GitLabLabelService(gitlabClient, issueRepository);
+      this.lifecycleWorkflow = new IssueLifecycleWorkflow(this.labelService, issueRepository);
+    }
+
     console.log(`[GitLab-Container] Service initialized with domain: ${this.routerDomain}`);
   }
 
   async createContainerForIssue(issue: GitLabIssue): Promise<string | null> {
     try {
+      // Step 0: Lifecycle hook - Container creation start
+      if (this.lifecycleWorkflow) {
+        await this.lifecycleWorkflow.onContainerCreationStart(issue);
+      }
+
       const userId = this.generateUserId(issue);
 
       console.log(`[GitLab-Container] Creating container for issue #${issue.iid}`);
@@ -43,6 +58,15 @@ export class GitLabContainerService {
 
       if (!containerId) {
         console.error(`[GitLab-Container] Failed to create container for issue ${issue.id}`);
+
+        // Lifecycle hook - Container creation failure
+        if (this.lifecycleWorkflow) {
+          await this.lifecycleWorkflow.onContainerCreationFailure(
+            issue,
+            new Error('Failed to create container')
+          );
+        }
+
         return null;
       }
 
@@ -52,6 +76,15 @@ export class GitLabContainerService {
 
       if (!isReady) {
         console.error(`[GitLab-Container] Container ${containerId} failed to become ready`);
+
+        // Lifecycle hook - Container creation failure (readiness timeout)
+        if (this.lifecycleWorkflow) {
+          await this.lifecycleWorkflow.onContainerCreationFailure(
+            issue,
+            new Error('Container readiness timeout')
+          );
+        }
+
         await this.handleDelegationError(issue, containerId, new Error('Container readiness timeout'));
         return containerId; // Return container ID even if delegation fails
       }
@@ -61,6 +94,11 @@ export class GitLabContainerService {
 
       // Step 4: Store GitLab issue information (existing)
       await this.issueRepository.markIssueProcessed(issue, containerId);
+
+      // Lifecycle hook - Container creation success
+      if (this.lifecycleWorkflow) {
+        await this.lifecycleWorkflow.onContainerCreationSuccess(issue, containerId);
+      }
 
       console.log(`[GitLab-Container] Container ${containerId} created and ready for issue #${issue.iid}`);
 
@@ -76,6 +114,12 @@ export class GitLabContainerService {
       return containerId;
     } catch (error) {
       console.error(`[GitLab-Container] Error creating container for issue ${issue.id}:`, error);
+
+      // Lifecycle hook - Container creation failure (general error)
+      if (this.lifecycleWorkflow) {
+        await this.lifecycleWorkflow.onContainerCreationFailure(issue, error as Error);
+      }
+
       return null;
     }
   }
@@ -355,5 +399,17 @@ ${containerId ? `**Manual Access**: [View Container](${containerUrl})` : ''}
         completed_count: 0
       }
     };
+  }
+
+  async onTaskCompletion(issue: GitLabIssue, taskResult: any): Promise<void> {
+    if (this.lifecycleWorkflow) {
+      await this.lifecycleWorkflow.onTaskCompletion(issue, taskResult);
+    }
+  }
+
+  async onTaskExecutionFailure(issue: GitLabIssue, error: Error): Promise<void> {
+    if (this.lifecycleWorkflow) {
+      await this.lifecycleWorkflow.onTaskExecutionFailure(issue, error);
+    }
   }
 }

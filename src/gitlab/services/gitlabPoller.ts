@@ -4,15 +4,20 @@ import { GitLabIssueRepository } from '../repositories/gitlabIssueRepository.js'
 import { ContainerTrigger } from '../triggers/containerTrigger.js';
 import { MachinePool } from '../../fly/machinePool.js';
 import { GitLabConfig } from '../types/index.js';
+import { GitLabLabelService } from './gitlabLabelService.js';
+import { IssueLifecycleWorkflow } from '../workflows/issueLifecycleWorkflow.js';
 
 export class GitLabPoller {
   private gitlabClient: GitLabClient;
   private containerService: GitLabContainerService;
   private issueRepository: GitLabIssueRepository;
   private containerTrigger: ContainerTrigger;
+  private labelService: GitLabLabelService;
+  private lifecycleWorkflow: IssueLifecycleWorkflow;
   private isRunning: boolean = false;
   private checkInterval: number;
   private intervalId: NodeJS.Timeout | null = null;
+  private labelCheckInterval: number;
 
   constructor(config: GitLabConfig, machinePool: MachinePool) {
     this.gitlabClient = new GitLabClient(config.url, config.token);
@@ -23,8 +28,15 @@ export class GitLabPoller {
       this.gitlabClient,
       process.env.FLY_ROUTER_DOMAIN || 'agent8.verse8.net'
     );
-    this.containerTrigger = new ContainerTrigger(this.containerService);
-    this.checkInterval = config.pollInterval * 60 * 1000;
+        this.checkInterval = config.pollInterval * 60 * 1000;
+
+    // Initialize lifecycle management services
+    this.labelService = new GitLabLabelService(this.gitlabClient, this.issueRepository);
+    this.lifecycleWorkflow = new IssueLifecycleWorkflow(this.labelService, this.issueRepository);
+    this.labelCheckInterval = config.pollInterval * 60 * 1000; // Same as issue check for now
+
+    // Initialize container trigger with label service for lifecycle validation
+    this.containerTrigger = new ContainerTrigger(this.containerService, this.labelService);
   }
 
   async start(): Promise<void> {
@@ -47,7 +59,10 @@ export class GitLabPoller {
 
     this.intervalId = setInterval(async () => {
       if (this.isRunning) {
-        await this.checkForNewIssues();
+        await Promise.all([
+          this.checkForNewIssues(),
+          this.checkForLabelChanges()
+        ]);
       }
     }, this.checkInterval);
 
@@ -106,6 +121,73 @@ export class GitLabPoller {
 
     } catch (error) {
       console.error('Error during issue check:', error);
+    }
+  }
+
+  private async checkForLabelChanges(): Promise<void> {
+    try {
+      console.log('[Lifecycle] Checking for label changes...');
+
+      const lastCheckTime = await this.issueRepository.getLastCheckTime() ||
+                           new Date(Date.now() - 60 * 60 * 1000);
+
+      const labelChanges = await this.labelService.detectLabelChanges(lastCheckTime);
+
+      if (labelChanges.length > 0) {
+        console.log(`[Lifecycle] Found ${labelChanges.length} label changes`);
+
+        for (const labelChange of labelChanges) {
+          try {
+            await this.lifecycleWorkflow.onLabelChange(labelChange);
+          } catch (error) {
+            console.error(`[Lifecycle] Error processing label change for issue #${labelChange.issue.iid}:`, error);
+          }
+        }
+      }
+
+      await this.processRetryableIssues();
+
+    } catch (error) {
+      console.error('[Lifecycle] Error during label change check:', error);
+    }
+  }
+
+  private async processRetryableIssues(): Promise<void> {
+    try {
+      const retryableIssues = this.lifecycleWorkflow.getIssuesReadyForRetry();
+
+      if (retryableIssues.length > 0) {
+        console.log(`[Lifecycle] Processing ${retryableIssues.length} retryable issues`);
+
+        for (const retryState of retryableIssues) {
+          try {
+            const issueRecord = await this.issueRepository.findByGitLabIssueId(retryState.issueId);
+            if (!issueRecord) continue;
+
+            const issue = await this.gitlabClient.getIssue(issueRecord.project_id, issueRecord.gitlab_iid);
+
+            console.log(`[Lifecycle] Retrying issue #${issue.iid} (attempt ${retryState.currentAttempt + 1}/${retryState.maxAttempts})`);
+
+            const containerId = await this.containerTrigger.processIssue(issue);
+
+            if (containerId) {
+              console.log(`[Lifecycle] Retry successful for issue #${issue.iid}, container: ${containerId}`);
+            }
+
+          } catch (error) {
+            console.error(`[Lifecycle] Retry failed for issue ${retryState.issueId}:`, error);
+
+            const issueRecord = await this.issueRepository.findByGitLabIssueId(retryState.issueId);
+            if (issueRecord) {
+              const issue = await this.gitlabClient.getIssue(issueRecord.project_id, issueRecord.gitlab_iid);
+              await this.lifecycleWorkflow.onContainerCreationFailure(issue, error as Error);
+            }
+          }
+        }
+      }
+
+    } catch (error) {
+      console.error('[Lifecycle] Error processing retryable issues:', error);
     }
   }
 
