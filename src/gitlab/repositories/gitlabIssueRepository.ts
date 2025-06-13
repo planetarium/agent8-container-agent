@@ -16,10 +16,20 @@ export class GitLabIssueRepository {
 
   async getProcessedIssueIds(): Promise<Set<number>> {
     const issues = await this.prisma.gitlab_issues.findMany({
-      select: { gitlab_issue_id: true }
+      select: { gitlab_issue_id: true, labels: true }
     });
 
-    return new Set(issues.map(issue => issue.gitlab_issue_id));
+    // Exclude TODO issues to allow reprocessing
+    const processedIssues = issues.filter(issue => {
+      const labels = JSON.parse(issue.labels) as string[];
+      const lifecycleLabel = labels.find(label =>
+        ['TODO', 'WIP', 'CONFIRM NEEDED', 'DONE', 'REJECT'].includes(label)
+      );
+
+      return lifecycleLabel !== 'TODO';
+    });
+
+    return new Set(processedIssues.map(issue => issue.gitlab_issue_id));
   }
 
   async markIssueProcessed(issue: GitLabIssue, containerId?: string): Promise<void> {
