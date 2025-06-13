@@ -4,7 +4,6 @@ import type {
   GitRepositoryInfo,
   GitBranchInfo,
   MergeRequestCreationResult,
-  GitLabMergeRequest,
   GitCommitResult,
   GitPushResult,
   GitCommitPushResult
@@ -22,10 +21,12 @@ export class GitLabGitService {
   private gitlabClient: GitLabClient;
   private workdir: string;
   private git: SimpleGit;
+  private branch: string;
 
-  constructor(gitlabClient: GitLabClient, workdir: string) {
+  constructor(gitlabClient: GitLabClient, workdir: string, branch: string) {
     this.gitlabClient = gitlabClient;
     this.workdir = workdir;
+    this.branch = branch;
     // Initialize git instance only when needed to avoid directory not exist error
     this.git = simpleGit();
   }
@@ -36,6 +37,7 @@ export class GitLabGitService {
   ): Promise<GitCheckoutResult> {
     try {
       console.log(`[GitLab-Git] Starting checkout for project ${projectId}, issue #${issueIid}`);
+      console.log(`[GitLab-Git] Target branch: ${this.branch}`);
 
       // 1. Fetch project and issue information in parallel via GitLab API
       const [project, issue] = await Promise.all([
@@ -52,18 +54,22 @@ export class GitLabGitService {
       this.git = simpleGit(this.workdir);
       await this.cloneRepository(repoInfo.httpUrl);
 
-      // 4. Create and checkout issue branch from default branch
-      const branchName = `issue-${issueIid}`;
-      await this.createIssueBranch(branchName, repoInfo.defaultBranch);
+      // 4. Determine which branch to use as base
+      const baseBranch = await this.determineBaseBranch(repoInfo.defaultBranch);
+      console.log(`[GitLab-Git] Using base branch: ${baseBranch}`);
 
-      // 5. Configure Git settings
+      // 5. Create and checkout issue branch from determined base branch
+      const branchName = `issue-${issueIid}`;
+      await this.createIssueBranch(branchName, baseBranch);
+
+      // 6. Configure Git settings
       await this.configureGitSettings();
 
-      // 6. Create Draft MR (new step)
+      // 7. Create Draft MR (with determined base branch as target)
       const mrResult = await this.createDraftMergeRequest({
         projectId,
         sourceBranch: branchName,
-        targetBranch: repoInfo.defaultBranch,
+        targetBranch: baseBranch,
         issue,
         issueIid
       });
@@ -491,6 +497,31 @@ temp/
     }
 
     return `${title}\n\n${description}`;
+  }
+
+  /**
+   * Determine which branch to use as base branch for new issue branch
+   * Priority: 1) specified branch (if exists) 2) defaultBranch
+   */
+  private async determineBaseBranch(defaultBranch: string): Promise<string> {
+    try {
+      // Check if specified branch exists in remote
+      const branches = await this.git.branch(['-r']);
+      const remoteBranches = branches.all.map(branch => branch.replace('origin/', ''));
+
+      if (remoteBranches.includes(this.branch)) {
+        console.log(`[GitLab-Git] Branch '${this.branch}' found, using as base`);
+        // Checkout to specified branch
+        await this.git.checkout(this.branch);
+        return this.branch;
+      } else {
+        console.log(`[GitLab-Git] Branch '${this.branch}' not found, falling back to default: ${defaultBranch}`);
+        return defaultBranch;
+      }
+    } catch (error) {
+      console.warn(`[GitLab-Git] Failed to determine base branch, using default: ${defaultBranch}`, error);
+      return defaultBranch;
+    }
   }
 }
 

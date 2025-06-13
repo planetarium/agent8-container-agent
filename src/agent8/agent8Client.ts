@@ -150,7 +150,11 @@ export class Agent8Client {
     // Initialize GitLab services (required)
     console.log(`[Agent8] Initializing GitLab services`);
     this.gitlabClient = new GitLabClient(process.env.GITLAB_URL, process.env.GITLAB_TOKEN);
-    this.gitlabGitService = new GitLabGitService(this.gitlabClient, workdir);
+
+    // Use specified branch, default to 'develop'
+    const branch = process.env.GITLAB_BRANCH || 'develop';
+    console.log(`[Agent8] Using branch: ${branch}`);
+    this.gitlabGitService = new GitLabGitService(this.gitlabClient, workdir, branch);
 
     // Initialize FileMapBuilder
     console.log(`[Agent8] Initializing FileMapBuilder`);
