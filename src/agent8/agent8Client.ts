@@ -24,15 +24,9 @@ import type { GitLabIssue, GitLabComment, IssueState } from '../gitlab/types/ind
 import type { LabelChangeEvent } from '../gitlab/types/lifecycle.js';
 import type { GitCommitPushResult, GitCommitResult } from '../gitlab/types/git.js';
 import type { IssueCompletionEvent } from '../gitlab/workflows/issueLifecycleWorkflow.js';
+import type { FileMap } from './types/fileMap.js';
+import { FileMapBuilder } from './utils/fileMapBuilder.js';
 
-
-interface FileMap {
-  [key: string]: {
-    type: string;
-    content: string;
-    isBinary: boolean;
-  };
-}
 
 interface ChatRequest {
   userId: string;
@@ -40,10 +34,10 @@ interface ChatRequest {
   targetServerUrl: string;
   cookies?: string;
   messages: UIMessage[];
-  files?: FileMap;
+  files: FileMap;
   promptId?: string;
   contextOptimization: boolean;
-  gitlabInfo?: GitLabInfo;
+  gitlabInfo: GitLabInfo;
 }
 
 interface Task {
@@ -113,6 +107,7 @@ export class Agent8Client {
   private readonly gitlabGitService: GitLabGitService;
   private readonly gitlabClient: GitLabClient;
   private readonly lifecycleWorkflow: IssueLifecycleWorkflow;
+  private readonly fileMapBuilder: FileMapBuilder;
   private issuePollingInterval: NodeJS.Timeout | null = null;
   private currentGitLabInfo: GitLabInfo | null = null;
   private previousIssueState: IssueState | null = null;
@@ -157,6 +152,10 @@ export class Agent8Client {
     this.gitlabClient = new GitLabClient(process.env.GITLAB_URL, process.env.GITLAB_TOKEN);
     this.gitlabGitService = new GitLabGitService(this.gitlabClient, workdir);
 
+    // Initialize FileMapBuilder
+    console.log(`[Agent8] Initializing FileMapBuilder`);
+    this.fileMapBuilder = new FileMapBuilder(workdir);
+
     // Initialize lifecycle workflow dependencies
     const gitlabIssueRepository = new GitLabIssueRepository();
     const gitlabLabelService = new GitLabLabelService(this.gitlabClient, gitlabIssueRepository);
@@ -178,46 +177,51 @@ export class Agent8Client {
     const startTime = Date.now();
 
     console.log(`[Agent8] Creating new task: ${taskId}`);
+    // Validate GitLab info is provided (required for Agent8Client)
+    if (!request.gitlabInfo) {
+      throw new Error('GitLab info is required for Agent8Client operation');
+    }
+
     console.log(`[Agent8] Task request info:`, {
       userId: request.userId,
       targetServerUrl: request.targetServerUrl,
       messagesCount: request.messages?.length || 0,
-      filesCount: request.files ? Object.keys(request.files).length : 0,
+      projectId: request.gitlabInfo.projectId,
+      issueIid: request.gitlabInfo.issueIid,
       promptId: request.promptId,
       contextOptimization: request.contextOptimization,
-      hasGitlabInfo: !!request.gitlabInfo,
     });
 
-    // Handle GitLab git checkout if GitLab info is provided
-    if (request.gitlabInfo) {
-      console.log(`[Agent8] GitLab info provided, performing git checkout for issue #${request.gitlabInfo.issueIid}`);
+    // Perform GitLab git checkout (required)
+    console.log(`[Agent8] Performing git checkout for issue #${request.gitlabInfo.issueIid}`);
 
-      // Start issue monitoring
-      console.log(`[Agent8] Starting issue monitoring for issue #${request.gitlabInfo.issueIid}`);
-      await this.startIssueMonitoring(request.gitlabInfo);
+    // Start issue monitoring
+    console.log(`[Agent8] Starting issue monitoring for issue #${request.gitlabInfo.issueIid}`);
+    await this.startIssueMonitoring(request.gitlabInfo);
 
-      try {
-        const gitResult = await this.gitlabGitService.checkoutRepositoryForIssue(
-          request.gitlabInfo.projectId,
-          request.gitlabInfo.issueIid
-        );
-        console.log(`[Agent8] Git checkout completed:`, {
-          success: gitResult.success,
-          clonedRepository: gitResult.clonedRepository,
-          createdBranch: gitResult.createdBranch,
-          hasMergeRequest: !!gitResult.createdMergeRequest,
-        });
-        if (gitResult.createdMergeRequest) {
-          console.log(`[Agent8] Draft MR created: ${gitResult.createdMergeRequest.web_url}`);
-        }
-      } catch (error) {
-        console.error(`[Agent8] Git checkout failed:`, error);
-        // Continue with task execution even if git checkout fails
+    try {
+      const gitResult = await this.gitlabGitService.checkoutRepositoryForIssue(
+        request.gitlabInfo.projectId,
+        request.gitlabInfo.issueIid
+      );
+      console.log(`[Agent8] Git checkout completed:`, {
+        success: gitResult.success,
+        clonedRepository: gitResult.clonedRepository,
+        createdBranch: gitResult.createdBranch,
+        hasMergeRequest: !!gitResult.createdMergeRequest,
+      });
+      if (gitResult.createdMergeRequest) {
+        console.log(`[Agent8] Draft MR created: ${gitResult.createdMergeRequest.web_url}`);
       }
-    } else {
-      console.log(`[Agent8] No GitLab issue info provided, skipping git checkout`);
-      console.log(`[Agent8] Note: In production, these are set automatically by GitLabContainerService`);
+    } catch (error) {
+      console.error(`[Agent8] Git checkout failed:`, error);
+      // Continue with task execution even if git checkout fails
     }
+
+    // Build FileMap from GitLab checkout (always required)
+    console.log(`[Agent8] Building FileMap from local checkout`);
+    const files = await this.buildFileMapFromWorkdir();
+    console.log(`[Agent8] FileMap built successfully with ${Object.keys(files).length} files`);
 
     const chatRequest: ChatRequest = {
       userId: request.userId,
@@ -225,7 +229,7 @@ export class Agent8Client {
       targetServerUrl: request.targetServerUrl,
       cookies: request.cookies,
       messages: MessageConverter.convertToUIMessages(request.messages || []),
-      files: request.files,
+      files: files,
       promptId: request.promptId,
       contextOptimization: request.contextOptimization,
       gitlabInfo: request.gitlabInfo,
@@ -336,7 +340,7 @@ export class Agent8Client {
 
     const payload = {
       messages: request.messages,
-      ...(request.files && { files: request.files }),
+      files: request.files,
       ...(request.promptId && { promptId: request.promptId }),
       ...(request.contextOptimization !== undefined && {
         contextOptimization: request.contextOptimization,
@@ -346,10 +350,8 @@ export class Agent8Client {
     const payloadString = JSON.stringify(payload);
     console.log(`[Agent8] Request payload size:`, payloadString.length, "bytes");
     console.log(`[Agent8] Request message count:`, request.messages.length);
-    if (request.files) {
-      console.log(`[Agent8] Attached files count:`, Object.keys(request.files).length);
-      console.log(`[Agent8] Attached files list:`, Object.keys(request.files));
-    }
+    console.log(`[Agent8] Attached files count:`, Object.keys(request.files).length);
+    console.log(`[Agent8] Attached files list:`, Object.keys(request.files));
 
     // Full payload content output (for debugging)
     console.log(`[Agent8] Full request payload content:`);
@@ -704,7 +706,7 @@ export class Agent8Client {
     return count;
   }
 
-  public getActiveTasksInfo(): Array<{id: string, status: string, progress?: number, createdAt: Date}> {
+  public getActiveTasksInfo(): Array<{ id: string, status: string, progress?: number, createdAt: Date }> {
     const activeTasks = [];
     for (const task of this.tasks.values()) {
       if (task.status === "pending" || task.status === "running") {
@@ -1081,7 +1083,7 @@ Please review the task results and change the issue status to **DONE** if everyt
       await this.checkIssueChanges();
     }, this.POLLING_INTERVAL);
 
-    console.log(`[Agent8] Issue monitoring started for #${gitlabInfo.issueIid} (${this.POLLING_INTERVAL/1000}s interval)`);
+    console.log(`[Agent8] Issue monitoring started for #${gitlabInfo.issueIid} (${this.POLLING_INTERVAL / 1000}s interval)`);
   }
 
   private async getCurrentIssueState(gitlabInfo: GitLabInfo): Promise<IssueState> {
@@ -1124,10 +1126,10 @@ Please review the task results and change the issue status to **DONE** if everyt
 
   private hasCommentChanged(previous: IssueState, current: IssueState): boolean {
     return previous.commentCount !== current.commentCount ||
-           previous.lastCommentAt !== current.lastCommentAt;
+      previous.lastCommentAt !== current.lastCommentAt;
   }
 
-    private async handleLabelChange(previousState: IssueState, currentState: IssueState): Promise<void> {
+  private async handleLabelChange(previousState: IssueState, currentState: IssueState): Promise<void> {
     console.log(`[Agent8] Label change detected: ${previousState.labels} → ${currentState.labels}`);
 
     const issue = await this.gitlabClient.getIssue(
@@ -1166,6 +1168,33 @@ Please review the task results and change the issue status to **DONE** if everyt
       this.issuePollingInterval = null;
       console.log(`[Agent8] Issue monitoring stopped`);
     }
+  }
+
+  private async buildFileMapFromWorkdir(): Promise<FileMap> {
+    console.log(`[Agent8] Building FileMap from working directory`);
+    const result = await this.fileMapBuilder.buildFileMap();
+
+    console.log(`[Agent8] FileMap built successfully:`, {
+      filesCount: Object.keys(result.fileMap).length,
+      totalSize: result.stats.totalSize,
+      duration: result.stats.duration,
+      processedFiles: result.stats.processedFiles,
+      skippedFiles: result.stats.skippedFiles,
+      errors: result.stats.errors.length
+    });
+
+    // If no files were processed, this indicates a critical problem
+    if (result.stats.processedFiles === 0) {
+      console.error(`[Agent8] FileMap build failed: No files were processed`);
+      throw new Error('FileMap build failed: No source files found or processed');
+    }
+
+    // Log warnings but continue (minor issues like some binary files, etc.)
+    if (result.stats.errors.length > 0) {
+      console.warn(`[Agent8] FileMap build completed with ${result.stats.errors.length} warnings:`, result.stats.errors.slice(0, 3));
+    }
+
+    return result.fileMap;
   }
 
   public cleanup(): void {
