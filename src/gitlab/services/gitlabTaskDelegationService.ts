@@ -1,12 +1,13 @@
 import { GitLabIssue, TaskDelegationOptions, TaskDelegationResult, TaskStatusResult, ApiResponse } from '../types/index.js';
 import { GitLabIssueRepository } from '../repositories/gitlabIssueRepository.js';
 import { GitLabClient } from './gitlabClient.js';
+import { getContainerAuthTokenForUser } from '../../container/containerAuthClient.js';
+import { TaskPayload } from '../../container/containerTaskReporter.js';
 
 export class GitLabTaskDelegationService {
   private issueRepository: GitLabIssueRepository;
   private gitlabClient?: GitLabClient;
   private routerDomain: string;
-  private authToken?: string;
 
   constructor(
     issueRepository: GitLabIssueRepository,
@@ -16,15 +17,6 @@ export class GitLabTaskDelegationService {
     this.issueRepository = issueRepository;
     this.gitlabClient = gitlabClient;
     this.routerDomain = routerDomain;
-
-    // 🧪 테스트 모드: 환경변수에서 고정 토큰 사용
-    const useTestToken = process.env.USE_TEST_TOKEN?.toLowerCase() === 'true';
-    if (useTestToken && process.env.TEST_V8_ACCESS_TOKEN) {
-      this.authToken = process.env.TEST_V8_ACCESS_TOKEN;
-      console.log(`[GitLab-Agent8] 🧪 TEST MODE: Using fixed token for container authentication`);
-    } else {
-      this.authToken = process.env.CONTAINER_AUTH_TOKEN;
-    }
 
     console.log(`[GitLab-Agent8] TaskDelegationService initialized with domain: ${this.routerDomain}`);
   }
@@ -55,7 +47,7 @@ export class GitLabTaskDelegationService {
       console.log(`[GitLab-Agent8] Target container URL: ${containerUrl}`);
 
       // Step 3: Prepare task payload with GitLab info for autonomous reporting
-      const payload = {
+      const payload: TaskPayload = {
         targetServerUrl: options.targetServerUrl,
         messages: messages,
         promptId: 'agent8',
@@ -68,7 +60,7 @@ export class GitLabTaskDelegationService {
           issueUrl: issue.web_url,
           issueTitle: issue.title,
           issueDescription: issue.description,
-          issueAuthor: issue.author.username,
+          issueAuthor: await this.getUserEmail(issue.author.id, issue.author.username),
           containerId: containerId
         }
       };
@@ -81,7 +73,7 @@ export class GitLabTaskDelegationService {
         gitlabInfo: payload.gitlabInfo
       });
 
-      // Step 4: Send task to container
+      // Step 4: Send task to container (using the issue author's email for authentication)
       const response = await this.sendTaskToContainer(containerUrl, payload);
 
       if (!response.success) {
@@ -108,55 +100,7 @@ export class GitLabTaskDelegationService {
     }
   }
 
-  /**
-   * Get task status from container
-   */
-  async getTaskStatus(containerId: string, taskId: string): Promise<TaskStatusResult> {
-    console.log(`[GitLab-Agent8] Checking task status: ${taskId} on container ${containerId}`);
 
-    try {
-      const containerUrl = this.buildContainerUrl(containerId);
-      const url = `${containerUrl}/api/background-task/${taskId}`;
-
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(this.authToken && { 'Authorization': `Bearer ${this.authToken}` })
-        },
-        signal: AbortSignal.timeout(10000) // 10 second timeout
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error(`[GitLab-Agent8] Task status check failed (${response.status}):`, errorText);
-        return {
-          success: false,
-          error: `HTTP ${response.status}: ${errorText}`
-        };
-      }
-
-      const data: any = await response.json();
-      console.log(`[GitLab-Agent8] Task status retrieved:`, {
-        taskId: taskId,
-        status: data.task?.status,
-        progress: data.task?.progress
-      });
-
-      return {
-        success: data.success,
-        task: data.task,
-        error: data.error
-      };
-
-    } catch (error) {
-      console.error(`[GitLab-Agent8] Task status check error:`, error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error'
-      };
-    }
-  }
 
   /**
    * Update GitLab issue with task execution results
@@ -257,20 +201,32 @@ ${artifactList}
     return url;
   }
 
-  /**
+    /**
    * Send task to container via HTTP API
    */
-  private async sendTaskToContainer(containerUrl: string, payload: any): Promise<ApiResponse> {
+  private async sendTaskToContainer(containerUrl: string, payload: TaskPayload): Promise<ApiResponse> {
     const url = `${containerUrl}/api/background-task`;
 
     console.log(`[GitLab-Agent8] Sending task to container: ${url}`);
 
+    // Extract user email from payload
+    const userEmail = payload.gitlabInfo?.issueAuthor;
+    if (!userEmail) {
+      throw new Error('[GitLab-Agent8] User email not found in payload.gitlabInfo.issueAuthor');
+    }
+
+    console.log(`[GitLab-Agent8] Using authentication for user: ${userEmail}`);
+
     try {
+      // Get user-specific authentication token
+      const authServerUrl = process.env.AUTH_SERVER_URL || 'https://v8-meme-api.verse8.io/v1';
+      const token = await getContainerAuthTokenForUser(authServerUrl, userEmail);
+
       const response = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(this.authToken && { 'Authorization': `Bearer ${this.authToken}` })
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify(payload),
         signal: AbortSignal.timeout(30000) // 30 second timeout
@@ -317,6 +273,51 @@ ${artifactList}
       case 'running': return '🔄';
       case 'pending': return '⏳';
       default: return '❓';
+    }
+  }
+
+  /**
+   * Get user email address by user ID (required - throws error if not found)
+   * Requires admin token to access private email addresses
+   */
+  private async getUserEmail(userId: number, username: string): Promise<string> {
+    if (!this.gitlabClient) {
+      throw new Error('[GitLab-Agent8] GitLab client not available for email lookup');
+    }
+
+    try {
+      // Use direct API call to get user details with email
+      const baseUrl = process.env.GITLAB_URL || 'https://gitlab.com';
+      const token = process.env.GITLAB_TOKEN;
+
+      if (!token) {
+        throw new Error('[GitLab-Agent8] GitLab token not available for email lookup');
+      }
+
+      const response = await fetch(`${baseUrl}/api/v4/users/${userId}`, {
+        headers: {
+          'PRIVATE-TOKEN': token
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error(`[GitLab-Agent8] Failed to fetch user details: ${response.status} ${response.statusText}`);
+      }
+
+      const user = await response.json() as { email?: string; public_email?: string };
+
+      // Return email (available for admins) or public_email (available for regular users)
+      const userEmail = user.email || user.public_email;
+
+      if (!userEmail) {
+        throw new Error(`[GitLab-Agent8] Could not retrieve email address for user ${username} (ID: ${userId}). Email is required for container authentication. Please ensure the user has a public email or the GitLab token has admin privileges.`);
+      }
+
+      return userEmail;
+
+    } catch (error) {
+      // Re-throw all errors since email is required
+      throw error;
     }
   }
 }

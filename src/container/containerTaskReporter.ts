@@ -7,6 +7,8 @@
 import { Agent8Client } from '../agent8';
 import type { ContainerServer } from '../server';
 import { ensureSafePath } from '../server';
+import * as fs from 'fs/promises';
+import { getContainerAuthTokenForUser } from './containerAuthClient.js';
 
 import type { GitLabInfo } from '../gitlab/types/api.js';
 import type { TaskExecutionResult } from '../agent8/types/api.js';
@@ -87,36 +89,39 @@ export class ContainerTaskReporter {
    * Execute Agent8 task using real Agent8Client
    */
   private async executeAgent8Task(taskPayload: TaskPayload): Promise<TaskResult> {
+    console.log(`[Container-Reporter] Executing Agent8 task with payload:`, {
+      targetServerUrl: taskPayload.targetServerUrl,
+      messagesCount: taskPayload.messages.length,
+      promptId: taskPayload.promptId,
+      contextOptimization: taskPayload.contextOptimization,
+      filesCount: Object.keys(taskPayload.files || {}).length
+    });
 
-    console.log(`[Container-Reporter] Executing Agent8 task...`);
-    console.log(`[Container-Reporter] Target server: ${taskPayload.targetServerUrl}`);
-    console.log(`[Container-Reporter] Prompt ID: ${taskPayload.promptId}`);
-    console.log(`[Container-Reporter] Messages count: ${taskPayload.messages.length}`);
+    const workdir = process.env.WORKDIR_NAME || '/home/project';
 
-            // Initialize Agent8Client
-    const workdir = process.env.WORKDIR || '/app';
+    // Ensure working directory exists
+    if (!await fs.access(workdir).then(() => true).catch(() => false)) {
+      await fs.mkdir(workdir, { recursive: true });
+    }
 
-    // Create a minimal container server implementation for this context
     // Agent8Client primarily needs ContainerServer for ActionRunner, but ActionRunner
     // mainly uses the ensureSafePath function which we can provide directly
     const containerServer = {} as ContainerServer;
 
     const agent8Client = new Agent8Client(containerServer, workdir);
 
-    try {
-      // 🧪 테스트 모드: 환경변수에서 고정 토큰 사용
-      let effectiveToken = process.env.GITLAB_TOKEN || '';
-      const useTestToken = process.env.USE_TEST_TOKEN?.toLowerCase() === 'true';
+        try {
+      // Get container authentication token for the specific GitLab user
+      const authServerUrl = process.env.AUTH_SERVER_URL || 'https://v8-meme-api.verse8.io/v1';
+      const userEmail = taskPayload.gitlabInfo.issueAuthor; // Use GitLab issue author email
+      const containerAuthToken = await getContainerAuthTokenForUser(authServerUrl, userEmail);
 
-      if (useTestToken && process.env.TEST_V8_ACCESS_TOKEN) {
-        effectiveToken = process.env.TEST_V8_ACCESS_TOKEN;
-        console.log(`[Container-Reporter] 🧪 TEST MODE: Using fixed token from environment variable`);
-      }
+      console.log(`[Container-Reporter] Generated container auth token for user: ${userEmail}`);
 
       // Create task request in Agent8Client format
       const taskRequest = {
         userId: 'container-task',
-        token: effectiveToken,
+        token: containerAuthToken,
         targetServerUrl: taskPayload.targetServerUrl,
         messages: taskPayload.messages,
         files: taskPayload.files || {},

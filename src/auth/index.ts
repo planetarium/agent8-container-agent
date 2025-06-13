@@ -29,9 +29,9 @@ export class AuthManager {
         throw new Error(`Token verification failed: ${response.statusText}`);
       }
 
-      const userInfo = await response.json();
+      const userInfo = await response.json() as { userUid?: string, [key: string]: any };
       if (!userInfo.userUid) throw new Error(`userUid doesn't exist in the response`);
-      return userInfo;
+      return { userUid: userInfo.userUid, ...userInfo };
     } catch (error) {
       throw new Error(`Error verifying token: ${error}`);
     }
@@ -43,4 +43,30 @@ export class AuthManager {
     }
     return authHeader.replace(/^Bearer /, '');
   }
-} 
+}
+
+/**
+ * Container Authentication Module
+ *
+ * Provides ECDSA P-256 based authentication for Agent8 containers.
+ * Handles signature generation, JWT token management, and server communication.
+ */
+
+export {
+  loadPrivateKey,
+  signMessage,
+  validateTimestamp,
+  createContainerAuthRequest,
+  type ContainerAuthRequest,
+} from './ecdsaUtil.js';
+
+export {
+  ContainerAuthClient,
+  type ContainerJWTPayload,
+  type AuthenticationResult,
+  type JWTValidationResult,
+} from './jwtUtil.js';
+
+export {
+  getContainerAuthTokenForUser,
+} from '../container/containerAuthClient.js';
