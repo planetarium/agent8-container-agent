@@ -29,9 +29,8 @@ export class ContainerTrigger {
       const hasTriggerLabel = this.labelService.hasTriggerLabel(issue);
 
       // Only process if:
-      // 1. Has trigger label AND
-      // 2. Either has TODO label OR no lifecycle label (will be set to TODO first)
-      if (hasTriggerLabel && (currentLabel === 'TODO' || currentLabel === null)) {
+      // Has trigger label AND has TODO label
+      if (hasTriggerLabel && currentLabel === 'TODO') {
         console.log(`[Trigger] Issue #${issue.iid} qualifies for container creation (lifecycle: ${currentLabel || 'none'})`);
         return true;
       } else {
