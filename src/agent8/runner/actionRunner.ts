@@ -176,16 +176,41 @@ export class ActionRunner {
 
       let stdout = "";
       let stderr = "";
+      let inactivityTimer: NodeJS.Timeout;
+
+      const resetInactivityTimer = () => {
+        if (inactivityTimer) {
+          clearTimeout(inactivityTimer);
+        }
+        inactivityTimer = setTimeout(() => {
+          if (!childProcess.killed) {
+            childProcess.kill();
+            resolve({
+              success: false,
+              error: "Command execution timed out due to inactivity",
+              output: stdout.trim(),
+            });
+          }
+        }, 60000);
+      };
+
+      resetInactivityTimer();
 
       childProcess.stdout?.on("data", (chunk) => {
         stdout += chunk.toString();
+        resetInactivityTimer();
       });
 
       childProcess.stderr?.on("data", (chunk) => {
         stderr += chunk.toString();
+        resetInactivityTimer();
       });
 
       childProcess.on("close", (code) => {
+        if (inactivityTimer) {
+          clearTimeout(inactivityTimer);
+        }
+
         if (code === 0) {
           resolve({
             success: true,
@@ -201,23 +226,14 @@ export class ActionRunner {
       });
 
       childProcess.on("error", (error) => {
+        if (inactivityTimer) {
+          clearTimeout(inactivityTimer);
+        }
         resolve({
           success: false,
           error: `Failed to execute command: ${error.message}`,
         });
       });
-
-      // Set timeout for command execution (30 seconds)
-      setTimeout(() => {
-        if (!childProcess.killed) {
-          childProcess.kill();
-          resolve({
-            success: false,
-            error: "Command execution timed out",
-            output: stdout.trim(),
-          });
-        }
-      }, 30000);
     });
   }
 }
