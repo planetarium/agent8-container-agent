@@ -27,6 +27,8 @@ import type { IssueCompletionEvent } from '../gitlab/workflows/issueLifecycleWor
 import type { FileMap } from './types/fileMap.js';
 import { FileMapBuilder } from './utils/fileMapBuilder.js';
 import { UseChatAdapter } from './utils/useChatAdapter.js';
+import { GitLabCommentFormatter } from '../gitlab/utils/commentFormatter.js';
+import type { ErrorDetails, SuccessDetails } from '../gitlab/utils/commentFormatter.js';
 import { promises as fs } from 'fs';
 import path from 'path';
 
@@ -1017,64 +1019,34 @@ export class Agent8Client {
    * Generate error comment templates for different failure types
    */
   private generateErrorComment(errorType: 'action_failure' | 'commit_failure' | 'push_failure', details: any): string {
-    const timestamp = details.timestamp || new Date().toISOString();
-    const containerId = details.containerId || 'unknown';
+    const errorDetails: ErrorDetails = {
+      timestamp: details.timestamp || new Date().toISOString(),
+      containerId: details.containerId || 'unknown',
+      errorMessage: details.errorMessage,
+      commitHash: details.commitHash,
+      failedActions: details.failedActions,
+      successfulActions: details.successfulActions,
+      failedActionsCount: details.failedActionsCount
+    };
 
     switch (errorType) {
       case 'action_failure':
-        return `## ❌ Agent8 Action Execution Failed
-
-**Error Type**: Action execution failure
-**Timestamp**: ${timestamp}
-**Failed Actions**: ${details.failedActionsCount}/${details.failedActionsCount + details.successfulActions}
-
-**Execution Statistics**:
-- Successful actions: ${details.successfulActions}
-- Failed actions: ${details.failedActionsCount}
-
-**Resolution Steps**:
-1. Review issue description for clarity
-2. Check for missing files or dependencies
-3. Change issue state back to TODO to retry
-
-**Container**: \`${containerId}\``;
-
+        return GitLabCommentFormatter.createActionFailureComment(errorDetails);
       case 'commit_failure':
-        return `## ❌ Auto-Commit Failed
-
-**Error Type**: Git commit failure
-**Timestamp**: ${timestamp}
-**Error Message**: ${details.errorMessage}
-
-**Resolution Steps**:
-1. Check Git configuration (user.name, user.email)
-2. Verify working directory permissions
-3. Change issue state back to TODO to retry
-
-**Container**: \`${containerId}\``;
-
+        return GitLabCommentFormatter.createCommitFailureComment(errorDetails);
       case 'push_failure':
-        return `## ❌ Auto-Push Failed
-
-**Error Type**: Git push failure
-**Timestamp**: ${timestamp}
-**Error Message**: ${details.errorMessage}
-**Commit Hash**: \`${details.commitHash || 'N/A'}\`
-
-**Changes were committed locally but failed to push to remote.**
-
-**Resolution Steps**:
-1. Verify GitLab token permissions (write_repository)
-2. Check network connectivity
-3. Change issue state back to TODO to retry
-
-**Container**: \`${containerId}\``;
-
+        return GitLabCommentFormatter.createPushFailureComment(errorDetails);
       default:
-        return `## ❌ Unknown Error
-
-**Timestamp**: ${timestamp}
-**Container**: \`${containerId}\``;
+        return GitLabCommentFormatter.createComment(
+          'Unknown Error',
+          '❌',
+          [{
+            title: 'Technical Details',
+            emoji: '📋',
+            content: [`**Container ID**: \`${errorDetails.containerId}\``]
+          }],
+          '*Agent8 automatic error report*'
+        );
     }
   }
 
@@ -1120,25 +1092,14 @@ export class Agent8Client {
     gitlabInfo: GitLabInfo,
     commitResult: GitCommitPushResult
   ): string {
-    const commitInfo = commitResult.commitResult.commitHash
-      ? `\n**Commit Hash:** \`${commitResult.commitResult.commitHash}\``
-      : '';
+    const successDetails: SuccessDetails = {
+      timestamp: new Date().toISOString(),
+      containerId: gitlabInfo.containerId,
+      commitHash: commitResult.commitResult.commitHash,
+      pushedBranch: commitResult.pushResult.pushedBranch
+    };
 
-    const branchInfo = commitResult.pushResult.pushedBranch
-      ? `\n**Branch:** \`${commitResult.pushResult.pushedBranch}\``
-      : '';
-
-    return `## ✅ Agent8 Task Completed
-
-**Status:** Task completed successfully
-**Completion Time:** ${new Date().toISOString()}
-**Container:** \`${gitlabInfo.containerId}\`${commitInfo}${branchInfo}
-
-**Next Steps:**
-Please review the task results and change the issue status to **DONE** if everything looks correct.
-
----
-*Agent8 automatic task completion notification*`;
+    return GitLabCommentFormatter.createSuccessComment(successDetails);
   }
 
   /**

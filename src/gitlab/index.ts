@@ -7,6 +7,7 @@ export { GitLabIssueRepository } from './repositories/gitlabIssueRepository.js';
 export { ContainerTrigger } from './triggers/containerTrigger.js';
 export { GitLabApiRoutes } from './api/gitlabApiRoutes.js';
 export { IssueLifecycleWorkflow } from './workflows/issueLifecycleWorkflow.js';
+export { GitLabCommentFormatter } from './utils/commentFormatter.js';
 
 import { GitLabIssueRepository } from './repositories/gitlabIssueRepository.js';
 import { GitLabClient } from './services/gitlabClient.js';
@@ -29,6 +30,13 @@ export type {
   IssueRetryState,
   LifecycleStats
 } from './types/index.js';
+
+export type {
+  CommentSection,
+  ErrorDetails,
+  SuccessDetails,
+  ContainerCreationDetails
+} from './utils/commentFormatter.js';
 
 // Health check utilities for system integration
 export const GitLabSystemHealth = {

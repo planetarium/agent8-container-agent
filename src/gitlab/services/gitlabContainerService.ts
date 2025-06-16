@@ -5,6 +5,8 @@ import { GitLabClient } from './gitlabClient.js';
 import { GitLabTaskDelegationService } from './gitlabTaskDelegationService.js';
 import { GitLabLabelService } from './gitlabLabelService.js';
 import { IssueLifecycleWorkflow } from '../workflows/issueLifecycleWorkflow.js';
+import { GitLabCommentFormatter } from '../utils/commentFormatter.js';
+import type { ContainerCreationDetails } from '../utils/commentFormatter.js';
 
 export class GitLabContainerService {
   private machinePool: MachinePool;
@@ -308,24 +310,17 @@ ${containerId ? `**Manual Access**: [View Container](${containerUrl})` : ''}
     try {
       const containerUrl = this.buildContainerUrl(containerId);
 
-      const comment = `## 🚀 Container Created & Task Delegated
+      const containerDetails: ContainerCreationDetails = {
+        containerId,
+        containerUrl,
+        issueIid: issue.iid,
+        issueTitle: issue.title,
+        labels: issue.labels,
+        authorName: issue.author.name,
+        authorUsername: issue.author.username
+      };
 
-**Container ID**: \`${containerId}\`
-**Container URL**: [${containerUrl}](${containerUrl})
-**Status**: Task delegated, container will report results automatically
-
-**Task Information**:
-- Issue: #${issue.iid} - ${issue.title}
-- Labels: ${issue.labels.join(', ') || 'None'}
-- Created by: ${issue.author.name} (@${issue.author.username})
-
-**Next Steps**:
-- Container is processing your request autonomously
-- Results will be posted as a comment when complete
-- Monitor container at the URL above if needed
-
----
-*This container was created automatically by Agent8 GitLab integration.*`;
+      const comment = GitLabCommentFormatter.createContainerCreatedComment(containerDetails);
 
       await this.gitlabClient.addIssueComment(issue.project_id, issue.iid, comment);
       console.log(`[GitLab-Container] Task delegation comment added to issue #${issue.iid}`);

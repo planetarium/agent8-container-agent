@@ -1,5 +1,6 @@
 import { GitLabClient } from './gitlabClient.js';
 import { GitLabIssueRepository } from '../repositories/gitlabIssueRepository.js';
+import { GitLabCommentFormatter } from '../utils/commentFormatter.js';
 import {
   GitLabIssue,
   LifecycleLabel,
@@ -138,15 +139,11 @@ export class GitLabLabelService {
     newLabel: LifecycleLabel,
     reason: string
   ): Promise<void> {
-    const emoji = this.getLabelEmoji(newLabel);
-    const comment = `${emoji} **Status Updated: ${newLabel}**
-
-**Reason:** ${reason}
-**Updated by:** System (GitLab Poller)
-**Timestamp:** ${new Date().toISOString()}
-
----
-*Automated lifecycle management by Agent8 GitLab Integration*`;
+    const comment = GitLabCommentFormatter.createStatusUpdateComment(
+      newLabel,
+      reason,
+      new Date().toISOString()
+    );
 
     try {
       await this.gitlabClient.addIssueComment(issue.project_id, issue.iid, comment);
@@ -155,17 +152,7 @@ export class GitLabLabelService {
     }
   }
 
-  private getLabelEmoji(label: LifecycleLabel): string {
-    const emojiMap: Record<LifecycleLabel, string> = {
-      'TODO': '📋',
-      'WIP': '🔄',
-      'CONFIRM NEEDED': '⏳',
-      'DONE': '✅',
-      'REJECT': '❌'
-    };
 
-    return emojiMap[label];
-  }
 
   private determineChangeType(
     previousLabels: string[],
