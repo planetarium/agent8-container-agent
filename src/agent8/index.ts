@@ -7,13 +7,13 @@ export type {
   ShellAction,
   ActionResult,
   ActionCallbacks,
-} from "./types/actions";
+} from "./types/actions.ts";
 
 // Artifact types
 export type {
   BoltArtifactData,
   ArtifactCallbacks,
-} from "./types/artifact";
+} from "./types/artifact.ts";
 
 // Parser types
 export type {
@@ -23,16 +23,16 @@ export type {
   StreamingMessageParserOptions,
   ParserState,
   TagMatch,
-} from "./types/parser";
+} from "./types/parser.ts";
 
 // Export parser classes
-export { StreamingMessageParser } from "./parser/streamingMessageParser";
+export { StreamingMessageParser } from "./parser/streamingMessageParser.ts";
 
 // Export runner classes
-export { ActionRunner } from "./runner/actionRunner";
+export { ActionRunner } from "./runner/actionRunner.ts";
 
 // Export client classes
-export { Agent8Client } from "./agent8Client";
+export { Agent8Client } from "./agent8Client.ts";
 
 // Export utility functions
 export {
@@ -41,4 +41,4 @@ export {
   cleanEscapedTags,
   isCompleteJSON,
   extractAttribute,
-} from "./parser/utils";
+} from "./parser/utils.ts";

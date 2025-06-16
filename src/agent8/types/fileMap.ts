@@ -1,8 +1,20 @@
 /**
+ * FileMap types and constants for handling file system trees
+ */
+
+const FILE_EXTENSION_REGEX = /\.[^.]+$/;
+
+export interface FileMapEntry {
+  content: string;
+  path: string;
+  lines?: number;
+}
+
+/**
  * File entry in FileMap
  */
 export interface File {
-  type: 'file';
+  type: "file";
   content: string;
   isBinary: boolean;
 }
@@ -11,7 +23,7 @@ export interface File {
  * Folder entry in FileMap
  */
 export interface Folder {
-  type: 'folder';
+  type: "folder";
 }
 
 /**
@@ -75,7 +87,7 @@ export interface FileProcessingError {
   /** Error message */
   error: string;
   /** Category of error for better handling */
-  errorType: 'read_error' | 'size_limit' | 'binary_file' | 'permission_denied';
+  errorType: "read_error" | "size_limit" | "binary_file" | "permission_denied";
 }
 
 /**
@@ -84,11 +96,11 @@ export interface FileProcessingError {
 export class FileMapBuildError extends Error {
   constructor(
     message: string,
-    public readonly errorType: 'memory_limit' | 'permission_error' | 'invalid_directory',
-    public readonly details?: any
+    public readonly errorType: "memory_limit" | "permission_error" | "invalid_directory",
+    public readonly details?: any,
   ) {
     super(message);
-    this.name = 'FileMapBuildError';
+    this.name = "FileMapBuildError";
   }
 }
 
@@ -102,20 +114,53 @@ export const DEFAULT_FILEMAP_CONFIG = {
   MAX_TOTAL_SIZE: 50 * 1024 * 1024,
   /** Default allowed file extensions */
   ALLOWED_EXTENSIONS: new Set([
-    '.js', '.ts', '.jsx', '.tsx', '.json', '.md', '.txt',
-    '.py', '.go', '.rs', '.java', '.c', '.cpp', '.h', '.hpp',
-    '.css', '.scss', '.html', '.vue', '.svelte',
-    '.yaml', '.yml', '.toml', '.dockerfile', '.gitignore'
+    ".js",
+    ".ts",
+    ".jsx",
+    ".tsx",
+    ".json",
+    ".md",
+    ".txt",
+    ".py",
+    ".go",
+    ".rs",
+    ".java",
+    ".c",
+    ".cpp",
+    ".h",
+    ".hpp",
+    ".css",
+    ".scss",
+    ".html",
+    ".vue",
+    ".svelte",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".dockerfile",
+    ".gitignore",
   ]),
   /** Default excluded directories */
   EXCLUDED_DIRECTORIES: new Set([
-    'node_modules', '.git', 'dist', 'build', 'out', 'target',
-    '__pycache__', '.venv', 'venv', '.next', '.nuxt',
-    'coverage', '.nyc_output', 'tmp', 'temp'
+    "node_modules",
+    ".git",
+    "dist",
+    "build",
+    "out",
+    "target",
+    "__pycache__",
+    ".venv",
+    "venv",
+    ".next",
+    ".nuxt",
+    "coverage",
+    ".nyc_output",
+    "tmp",
+    "temp",
   ]),
   /** Default excluded file patterns */
   EXCLUDED_PATTERNS: [
-    /\.env(\.|$)/,  // .env, .env.local, etc.
+    /\.env(\.|$)/, // .env, .env.local, etc.
     /\.log$/,
     /\.tmp$/,
     /\.cache$/,
@@ -123,51 +168,53 @@ export const DEFAULT_FILEMAP_CONFIG = {
     /yarn\.lock$/,
     /pnpm-lock\.yaml$/,
     /Cargo\.lock$/,
-    /composer\.lock$/
-  ]
+    /composer\.lock$/,
+  ],
 } as const;
 
 /**
  * MIME type mapping for file extensions
  */
 export const MIME_TYPE_MAP: Record<string, string> = {
-  '.js': 'application/javascript',
-  '.ts': 'application/typescript',
-  '.jsx': 'application/javascript',
-  '.tsx': 'application/typescript',
-  '.json': 'application/json',
-  '.md': 'text/markdown',
-  '.txt': 'text/plain',
-  '.py': 'text/x-python',
-  '.go': 'text/x-go',
-  '.rs': 'text/x-rust',
-  '.java': 'text/x-java',
-  '.c': 'text/x-c',
-  '.cpp': 'text/x-c++',
-  '.h': 'text/x-c',
-  '.hpp': 'text/x-c++',
-  '.css': 'text/css',
-  '.scss': 'text/x-scss',
-  '.html': 'text/html',
-  '.vue': 'text/x-vue',
-  '.svelte': 'text/x-svelte',
-  '.yaml': 'application/yaml',
-  '.yml': 'application/yaml',
-  '.toml': 'application/toml',
-  '.dockerfile': 'text/x-dockerfile',
-  '.gitignore': 'text/plain'
+  ".js": "application/javascript",
+  ".ts": "application/typescript",
+  ".jsx": "application/javascript",
+  ".tsx": "application/typescript",
+  ".json": "application/json",
+  ".md": "text/markdown",
+  ".txt": "text/plain",
+  ".py": "text/x-python",
+  ".go": "text/x-go",
+  ".rs": "text/x-rust",
+  ".java": "text/x-java",
+  ".c": "text/x-c",
+  ".cpp": "text/x-c++",
+  ".h": "text/x-c",
+  ".hpp": "text/x-c++",
+  ".css": "text/css",
+  ".scss": "text/x-scss",
+  ".html": "text/html",
+  ".vue": "text/x-vue",
+  ".svelte": "text/x-svelte",
+  ".yaml": "application/yaml",
+  ".yml": "application/yaml",
+  ".toml": "application/toml",
+  ".dockerfile": "text/x-dockerfile",
+  ".gitignore": "text/plain",
 };
 
 /**
  * Helper function to normalize FileMapBuildOptions with defaults
  */
-export function normalizeFileMapOptions(options?: FileMapBuildOptions): Required<FileMapBuildOptions> {
+export function normalizeFileMapOptions(
+  options?: FileMapBuildOptions,
+): Required<FileMapBuildOptions> {
   return {
     maxFileSize: options?.maxFileSize ?? DEFAULT_FILEMAP_CONFIG.MAX_FILE_SIZE,
     maxTotalSize: options?.maxTotalSize ?? DEFAULT_FILEMAP_CONFIG.MAX_TOTAL_SIZE,
     allowedExtensions: options?.allowedExtensions ?? DEFAULT_FILEMAP_CONFIG.ALLOWED_EXTENSIONS,
     excludeDirectories: options?.excludeDirectories ?? DEFAULT_FILEMAP_CONFIG.EXCLUDED_DIRECTORIES,
-    excludePatterns: options?.excludePatterns ?? [...DEFAULT_FILEMAP_CONFIG.EXCLUDED_PATTERNS]
+    excludePatterns: options?.excludePatterns ?? [...DEFAULT_FILEMAP_CONFIG.EXCLUDED_PATTERNS],
   };
 }
 
@@ -180,23 +227,15 @@ export function createInitialStats(): FileMapBuildStats {
     skippedFiles: 0,
     totalSize: 0,
     duration: 0,
-    errors: []
+    errors: [],
   };
-}
-
-/**
- * Helper function to get MIME type from file path
- */
-export function getMimeTypeFromPath(filePath: string): string {
-  const ext = filePath.toLowerCase().match(/\.[^.]+$/)?.[0];
-  return ext ? (MIME_TYPE_MAP[ext] ?? 'text/plain') : 'text/plain';
 }
 
 /**
  * Helper function to check if file extension is allowed
  */
 export function isExtensionAllowed(filePath: string, allowedExtensions: Set<string>): boolean {
-  const ext = filePath.toLowerCase().match(/\.[^.]+$/)?.[0];
+  const ext = filePath.toLowerCase().match(FILE_EXTENSION_REGEX)?.[0];
   return ext ? allowedExtensions.has(ext) : false;
 }
 
@@ -204,7 +243,7 @@ export function isExtensionAllowed(filePath: string, allowedExtensions: Set<stri
  * Helper function to check if directory should be excluded
  */
 export function isDirectoryExcluded(dirPath: string, excludeDirectories: Set<string>): boolean {
-  const dirName = dirPath.split('/').pop() || '';
+  const dirName = dirPath.split("/").pop() || "";
   return excludeDirectories.has(dirName);
 }
 
@@ -212,6 +251,6 @@ export function isDirectoryExcluded(dirPath: string, excludeDirectories: Set<str
  * Helper function to check if file matches exclusion patterns
  */
 export function isFileExcluded(filePath: string, excludePatterns: RegExp[]): boolean {
-  const fileName = filePath.split('/').pop() || '';
-  return excludePatterns.some(pattern => pattern.test(fileName));
+  const fileName = filePath.split("/").pop() || "";
+  return excludePatterns.some((pattern) => pattern.test(fileName));
 }

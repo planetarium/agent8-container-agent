@@ -12,6 +12,7 @@
     "check-all": "bun check && bun test && bunx tsc --noEmit"
   },
   "dependencies": {
+    "@ai-sdk/ui-utils": "^1.2.11",
     "@gitbeaker/rest": "^42.5.0",
     "@prisma/client": "^6.7.0",
     "ai": "^4.3.16",

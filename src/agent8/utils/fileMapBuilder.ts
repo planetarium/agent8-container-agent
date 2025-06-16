@@ -1,19 +1,14 @@
-import { readdir, readFile, stat } from 'node:fs/promises';
-import { join, relative, extname } from 'node:path';
-import type {
-  FileMap,
-  FileMapBuildOptions,
-  FileMapBuildResult,
-} from '../types/fileMap.js';
+import { readFile, readdir, stat } from "node:fs/promises";
+import { extname, join, relative } from "node:path";
+import type { FileMap, FileMapBuildOptions, FileMapBuildResult } from "../types/fileMap.js";
 import {
-  normalizeFileMapOptions as normalize,
-  createInitialStats as createStats,
-  getMimeTypeFromPath as getMimeType,
-  isExtensionAllowed as checkExtension,
+  FileMapBuildError as BuildError,
   isDirectoryExcluded as checkDirectory,
+  isExtensionAllowed as checkExtension,
   isFileExcluded as checkFile,
-  FileMapBuildError as BuildError
-} from '../types/fileMap.js';
+  createInitialStats as createStats,
+  normalizeFileMapOptions as normalize,
+} from "../types/fileMap.js";
 
 /**
  * Node.js file system operations implementation
@@ -33,7 +28,7 @@ class NodeFileSystemOperations {
     return {
       isFile: () => stats.isFile(),
       isDirectory: () => stats.isDirectory(),
-      size: stats.size
+      size: stats.size,
     };
   }
 
@@ -41,7 +36,7 @@ class NodeFileSystemOperations {
     return await readdir(path);
   }
 
-  async readFile(path: string, encoding: string = 'utf8'): Promise<string> {
+  async readFile(path: string, encoding = "utf8"): Promise<string> {
     return await readFile(path, { encoding: encoding as BufferEncoding });
   }
 
@@ -59,17 +54,45 @@ class NodeFileSystemOperations {
  */
 class BinaryDetector {
   private static readonly BINARY_EXTENSIONS = new Set([
-    '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.ico', '.tiff', '.webp',
-    '.mp3', '.mp4', '.avi', '.mov', '.wav', '.flac',
-    '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
-    '.zip', '.tar', '.gz', '.rar', '.7z',
-    '.exe', '.dll', '.so', '.dylib',
-    '.bin', '.dat', '.db', '.sqlite'
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".bmp",
+    ".ico",
+    ".tiff",
+    ".webp",
+    ".mp3",
+    ".mp4",
+    ".avi",
+    ".mov",
+    ".wav",
+    ".flac",
+    ".pdf",
+    ".doc",
+    ".docx",
+    ".xls",
+    ".xlsx",
+    ".ppt",
+    ".pptx",
+    ".zip",
+    ".tar",
+    ".gz",
+    ".rar",
+    ".7z",
+    ".exe",
+    ".dll",
+    ".so",
+    ".dylib",
+    ".bin",
+    ".dat",
+    ".db",
+    ".sqlite",
   ]);
 
-  isBinary(content: string, filePath?: string): boolean {
+  isBinary(content: string, _filePath?: string): boolean {
     // Check for null bytes (strong indicator of binary content)
-    if (content.includes('\0')) {
+    if (content.includes("\0")) {
       return true;
     }
 
@@ -86,7 +109,7 @@ class BinaryDetector {
     }
 
     // If more than 30% non-printable, consider binary
-    return (nonPrintableCount / sampleSize) > 0.3;
+    return nonPrintableCount / sampleSize > 0.3;
   }
 
   isBinaryExtension(filePath: string): boolean {
@@ -117,22 +140,11 @@ export class FileMapBuilder {
     const effectiveOptions = options ? normalize(options) : this.options;
 
     try {
-      console.log(`[FileMapBuilder] Starting FileMap construction from: ${this.workdir}`);
-      console.log(`[FileMapBuilder] Options:`, {
-        maxFileSize: effectiveOptions.maxFileSize,
-        maxTotalSize: effectiveOptions.maxTotalSize,
-        allowedExtensions: effectiveOptions.allowedExtensions.size,
-        excludeDirectories: effectiveOptions.excludeDirectories.size,
-        excludePatterns: effectiveOptions.excludePatterns.length
-      });
-
       // Step 1: Get all source files
       const allFiles = await this.getAllSourceFiles();
-      console.log(`[FileMapBuilder] Found ${allFiles.length} total files`);
 
       // Step 2: Filter allowed files
-      const allowedFiles = allFiles.filter(file => this.isFileAllowed(file));
-      console.log(`[FileMapBuilder] ${allowedFiles.length} files passed filtering`);
+      const allowedFiles = allFiles.filter((file) => this.isFileAllowed(file));
 
       // Step 3: Read content and build FileMap
       const fileMap: FileMap = {};
@@ -143,7 +155,7 @@ export class FileMapBuilder {
           console.error(`[FileMapBuilder] Total size limit reached at ${stats.totalSize} bytes`);
           throw new BuildError(
             `Total size limit exceeded: ${stats.totalSize} >= ${effectiveOptions.maxTotalSize}`,
-            'memory_limit'
+            "memory_limit",
           );
         }
 
@@ -152,18 +164,13 @@ export class FileMapBuilder {
           const isBinary = this.isBinaryFile(filePath, content);
 
           fileMap[filePath] = {
-            type: 'file',
+            type: "file",
             content,
-            isBinary
+            isBinary,
           };
 
           stats.processedFiles++;
           stats.totalSize += content.length;
-
-          // Log progress for large operations
-          if (stats.processedFiles % 100 === 0) {
-            console.log(`[FileMapBuilder] Processed ${stats.processedFiles} files, ${stats.totalSize} bytes`);
-          }
         } else {
           stats.skippedFiles++;
         }
@@ -171,24 +178,12 @@ export class FileMapBuilder {
 
       stats.duration = Date.now() - startTime;
 
-      console.log(`[FileMapBuilder] FileMap construction completed:`, {
-        processedFiles: stats.processedFiles,
-        skippedFiles: stats.skippedFiles,
-        totalSize: stats.totalSize,
-        duration: stats.duration
-      });
-
       return { fileMap, stats };
-
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error(`[FileMapBuilder] FileMap construction failed: ${errorMessage}`);
 
-      throw new BuildError(
-        `Failed to build FileMap: ${errorMessage}`,
-        'invalid_directory',
-        error
-      );
+      throw new BuildError(`Failed to build FileMap: ${errorMessage}`, "invalid_directory", error);
     }
   }
 
@@ -227,8 +222,8 @@ export class FileMapBuilder {
         console.error(`[FileMapBuilder] Cannot read directory ${dirPath}: ${errorMessage}`);
         throw new BuildError(
           `Failed to read directory: ${dirPath} - ${errorMessage}`,
-          'permission_error',
-          error
+          "permission_error",
+          error,
         );
       }
     };
@@ -251,15 +246,13 @@ export class FileMapBuilder {
 
       // Check if file extension suggests binary content
       if (this.binaryDetector.isBinaryExtension(filePath)) {
-        console.log(`[FileMapBuilder] Skipping binary file by extension: ${filePath}`);
         return null;
       }
 
-      const content = await this.fileSystem.readFile(fullPath, 'utf8');
+      const content = await this.fileSystem.readFile(fullPath, "utf8");
 
       // Additional binary check on content
       if (this.binaryDetector.isBinary(content, filePath)) {
-        console.log(`[FileMapBuilder] Skipping binary file by content: ${filePath}`);
         return null;
       }
 
@@ -269,19 +262,17 @@ export class FileMapBuilder {
       console.error(`[FileMapBuilder] Failed to read ${filePath}: ${errorMessage}`);
       throw new BuildError(
         `Failed to read file: ${filePath} - ${errorMessage}`,
-        'permission_error',
-        error
+        "permission_error",
+        error,
       );
     }
   }
 
-  getMimeType(filePath: string): string {
-    return getMimeType(filePath);
-  }
-
   isBinaryFile(filePath: string, content: string): boolean {
-    return this.binaryDetector.isBinary(content, filePath) ||
-           this.binaryDetector.isBinaryExtension(filePath);
+    return (
+      this.binaryDetector.isBinary(content, filePath) ||
+      this.binaryDetector.isBinaryExtension(filePath)
+    );
   }
 
   isFileAllowed(filePath: string): boolean {
@@ -299,8 +290,9 @@ export class FileMapBuilder {
     }
 
     // Check if any part of the path is an excluded directory
-    const pathParts = relativePath.split('/');
-    for (const part of pathParts.slice(0, -1)) { // Exclude filename itself
+    const pathParts = relativePath.split("/");
+    for (const part of pathParts.slice(0, -1)) {
+      // Exclude filename itself
       if (this.options.excludeDirectories.has(part)) {
         return false;
       }

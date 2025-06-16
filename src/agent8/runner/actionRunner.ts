@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
-import { rm, writeFile, mkdir } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { ContainerServer } from "../../server";
-import { ensureSafePath } from "../../server";
+import type { ContainerServer } from "../../server.ts";
+import { ensureSafePath } from "../../server.ts";
 import type {
   ActionCallbacks,
   ActionResult,
@@ -141,7 +141,7 @@ export class ActionRunner {
    * Execute shell commands with simplified non-interactive approach
    */
   private async executeShellAction(action: ShellAction): Promise<ActionResult> {
-    const { command, content } = action;
+    const { command } = action;
 
     if (!command) {
       throw new Error("Command is required for shell actions");

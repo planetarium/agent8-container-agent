@@ -10,5 +10,5 @@ export {
   createTaskEndpoint,
   type GitLabInfo,
   type TaskPayload,
-  type TaskResult
-} from './containerTaskReporter.js';
+  type TaskResult,
+} from "./containerTaskReporter.js";

@@ -1,13 +1,26 @@
 import { parseDataStreamPart } from "ai";
-import type { ActionType, BoltActionData } from "../types/actions";
-import type { BoltArtifactData } from "../types/artifact";
-import type { ParserCallbacks } from "../types/parser";
+import type { ActionType, BoltActionData } from "../types/actions.ts";
+import type { BoltArtifactData } from "../types/artifact.ts";
+import type { ParserCallbacks } from "../types/parser.ts";
 
 // Tag constants
 const ARTIFACT_TAG_OPEN = "<boltArtifact";
 const ARTIFACT_TAG_CLOSE = "</boltArtifact>";
 const ARTIFACT_ACTION_TAG_OPEN = "<boltAction";
 const ARTIFACT_ACTION_TAG_CLOSE = "</boltAction>";
+
+const MARKDOWN_CODEBLOCK_REGEX = /^\s*```\w*\n([\s\S]*?)\n\s*```\s*$/;
+const XML_CODEBLOCK_REGEX = /^\s*<!\[CDATA\[\n([\s\S]*?)\n\s*\]\]>\s*$/;
+const STREAM_ESCAPE_PATTERNS = {
+  LT: /&lt;/g,
+  GT: /&gt;/g,
+  AMP: /&amp;/g,
+  QUOT: /&quot;/g,
+  APOS: /&#x27;/g,
+  NEWLINE: /\\n/g,
+  SINGLE_QUOTE: /\\'/g,
+  DOUBLE_QUOTE: /\\"/g,
+};
 
 interface MessageState {
   position: number;
@@ -46,7 +59,9 @@ export class StreamingMessageParser {
           if (parsedPart.type === "text") {
             extractedText += parsedPart.value;
           }
-        } catch (_err) {}
+        } catch (_err) {
+          console.error("[StreamingMessageParser] Error parsing data stream part:", _err);
+        }
       }
     }
 
@@ -272,15 +287,12 @@ export class StreamingMessageParser {
     return output;
   }
 
-    private parseActionTag(
+  private parseActionTag(
     input: string,
     actionOpenIndex: number,
     actionEndIndex: number,
   ): BoltActionData {
     const actionTag = input.slice(actionOpenIndex, actionEndIndex + 1);
-
-    // Log the actual tag being parsed
-    console.log("[Agent8 Parser] Parsing action tag:", actionTag);
 
     const actionType = this.extractAttribute(actionTag, "type") as ActionType;
 
@@ -293,32 +305,21 @@ export class StreamingMessageParser {
       const filePath = this.extractAttribute(actionTag, "filePath");
       const operation = this.extractAttribute(actionTag, "operation");
 
-      console.log("[Agent8 Parser] File action - filePath:", filePath, "operation:", operation);
-
       if (filePath) {
         actionAttributes.filePath = filePath;
       }
       if (operation) {
         actionAttributes.operation = operation as "create" | "update" | "delete";
       } else {
-        // Default to "create" if operation is not specified
-        console.log("[Agent8 Parser] No operation specified, defaulting to 'create'");
         actionAttributes.operation = "create";
       }
     } else if (actionType === "shell") {
       const command = this.extractAttribute(actionTag, "command");
 
-      console.log("[Agent8 Parser] Shell action - command:", command);
-
       if (command) {
         actionAttributes.command = command;
-      } else {
-        // Try to extract command from content in onActionClose
-        console.log("[Agent8 Parser] No command attribute found, will extract from content");
       }
     }
-
-    console.log("[Agent8 Parser] Parsed attributes:", actionAttributes);
     return actionAttributes as BoltActionData;
   }
 
@@ -343,23 +344,20 @@ export class StreamingMessageParser {
   }
 
   private cleanoutCodeblockSyntax(content: string): string {
-    const markdownCodeBlockRegex = /^\s*```\w*\n([\s\S]*?)\n\s*```\s*$/;
-    const xmlCodeBlockRegex = /^\s*<!\[CDATA\[\n([\s\S]*?)\n\s*\]\]>\s*$/;
-
-    const match = content.match(markdownCodeBlockRegex) || content.match(xmlCodeBlockRegex);
+    const match = content.match(MARKDOWN_CODEBLOCK_REGEX) || content.match(XML_CODEBLOCK_REGEX);
     return match ? match[1] : content;
   }
 
   private cleanEscapedTags(content: string): string {
     return content
-      .replace(/&lt;/g, "<")
-      .replace(/&gt;/g, ">")
-      .replace(/&amp;/g, "&")
-      .replace(/&quot;/g, '"')
-      .replace(/&#x27;/g, "'")
-      .replace(/\\n/g, "\n")
-      .replace(/\\'/g, "'")
-      .replace(/\\"/g, '"');
+      .replace(STREAM_ESCAPE_PATTERNS.LT, "<")
+      .replace(STREAM_ESCAPE_PATTERNS.GT, ">")
+      .replace(STREAM_ESCAPE_PATTERNS.AMP, "&")
+      .replace(STREAM_ESCAPE_PATTERNS.QUOT, '"')
+      .replace(STREAM_ESCAPE_PATTERNS.APOS, "'")
+      .replace(STREAM_ESCAPE_PATTERNS.NEWLINE, "\n")
+      .replace(STREAM_ESCAPE_PATTERNS.SINGLE_QUOTE, "'")
+      .replace(STREAM_ESCAPE_PATTERNS.DOUBLE_QUOTE, '"');
   }
 
   reset(): void {

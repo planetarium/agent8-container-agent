@@ -1,21 +1,21 @@
-import { GitLabIssue } from './index.js';
+import type { GitLabIssue } from "./index.js";
 
-export type LifecycleLabel = 'TODO' | 'WIP' | 'CONFIRM NEEDED' | 'DONE' | 'REJECT';
+export type LifecycleLabel = "TODO" | "WIP" | "CONFIRM NEEDED" | "DONE" | "REJECT";
 
 export const LIFECYCLE_LABELS: readonly LifecycleLabel[] = [
-  'TODO',
-  'WIP',
-  'CONFIRM NEEDED',
-  'DONE',
-  'REJECT'
+  "TODO",
+  "WIP",
+  "CONFIRM NEEDED",
+  "DONE",
+  "REJECT",
 ] as const;
 
 export const LIFECYCLE_TRANSITIONS: Record<LifecycleLabel, LifecycleLabel[]> = {
-  'TODO': ['WIP', 'REJECT'],
-  'WIP': ['CONFIRM NEEDED', 'REJECT'],
-  'CONFIRM NEEDED': ['DONE', 'WIP', 'REJECT'],
-  'DONE': [],
-  'REJECT': ['TODO']
+  TODO: ["WIP", "REJECT"],
+  WIP: ["CONFIRM NEEDED", "REJECT"],
+  "CONFIRM NEEDED": ["DONE", "WIP", "REJECT"],
+  DONE: [],
+  REJECT: ["TODO"],
 } as const;
 
 export interface LifecycleConfig {
@@ -33,14 +33,14 @@ export interface LabelChangeEvent {
   previousLabels: string[];
   currentLabels: string[];
   changedAt: Date;
-  changeType: 'added' | 'removed' | 'modified';
+  changeType: "added" | "removed" | "modified";
 }
 
 export interface LifecycleTransition {
   from: LifecycleLabel | null;
   to: LifecycleLabel;
   reason: string;
-  triggeredBy: 'system' | 'user' | 'error';
+  triggeredBy: "system" | "user" | "error";
   timestamp: Date;
 }
 

@@ -4,7 +4,7 @@
  * This file contains type definitions for Agent8-related API requests and responses.
  */
 
-import type { GitLabInfo } from '../../gitlab/types/api.js';
+import type { GitLabInfo } from "../../gitlab/types/api.js";
 
 export interface TaskRequest {
   targetServerUrl: string;
@@ -28,7 +28,7 @@ export interface TaskStatusResponse {
   success: boolean;
   task?: {
     id: string;
-    status: 'pending' | 'running' | 'completed' | 'failed';
+    status: "pending" | "running" | "completed" | "failed";
     progress?: number;
     createdAt: Date;
     completedAt?: Date;

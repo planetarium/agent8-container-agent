@@ -1,5 +1,5 @@
-import { FlyClient } from './client';
-import { PrismaClient, Prisma } from '@prisma/client';
+import { type Prisma, PrismaClient } from "@prisma/client";
+import type { FlyClient } from "./client.ts";
 
 const prisma = new PrismaClient();
 
@@ -15,7 +15,7 @@ export class MachinePool {
     options: {
       defaultPoolSize: number;
       checkInterval?: number; // in milliseconds
-    }
+    },
   ) {
     this.flyClient = flyClient;
     this.defaultPoolSize = options.defaultPoolSize;
@@ -26,7 +26,6 @@ export class MachinePool {
    * Start the machine pool management
    */
   async start(): Promise<void> {
-    console.log('Starting pool manager...');
     // Initial pool check
     await this.checkPool();
 
@@ -62,13 +61,15 @@ export class MachinePool {
         const dbMachineIds = new Set(machines.map((m: { machine_id: string }) => m.machine_id));
         
         // 3. DB에는 있는데 실제로 없는 머신 → soft delete
-        const machinesToDelete = machines.filter((m: { machine_id: string }) => !flyMachineIds.has(m.machine_id));
+        const machinesToDelete = machines.filter(
+          (m: { machine_id: string }) => !flyMachineIds.has(m.machine_id),
+        );
         if (machinesToDelete.length > 0) {
           await tx.machine_pool.updateMany({
             where: {
-              machine_id: { in: machinesToDelete.map((m: { machine_id: string }) => m.machine_id) }
+              machine_id: { in: machinesToDelete.map((m: { machine_id: string }) => m.machine_id) },
             },
-            data: { deleted: true }
+            data: { deleted: true },
           });
         }
 
@@ -109,14 +110,14 @@ export class MachinePool {
           is_available: true,
           deleted: false,
           assigned_to: null,
-        }
+        },
       });
       if (availableCount < this.defaultPoolSize) {
         const toCreate = this.defaultPoolSize - availableCount;
         await this.createNewMachines(toCreate);
       }
     } catch (error) {
-      console.error('Error checking machine pool:', error);
+      console.error("Error checking machine pool:", error);
     }
   }
 
@@ -145,7 +146,7 @@ export class MachinePool {
   }> {
     const image = this.flyClient.getImageRef();
     if (!image) {
-      throw new Error('Failed to get image reference');
+      throw new Error("Failed to get image reference");
     }
 
     return {
@@ -155,7 +156,7 @@ export class MachinePool {
       env: {
         FLY_PROCESS_GROUP: "worker",
         PORT: "3000",
-        PRIMARY_REGION: "nrt"
+        PRIMARY_REGION: "nrt",
       },
       services: [
         {
@@ -163,15 +164,15 @@ export class MachinePool {
           internal_port: 3000,
           ports: [
             { port: 80, handlers: ["http"] },
-            { port: 443, handlers: ["tls", "http"] }
-          ]
-        }
+            { port: 443, handlers: ["tls", "http"] },
+          ],
+        },
       ],
       resources: {
         cpu_kind: "shared",
         cpus: 2,
-        memory_mb: 2048
-      }
+        memory_mb: 2048,
+      },
     };
   }
 
@@ -181,19 +182,21 @@ export class MachinePool {
   private async createNewMachines(count: number): Promise<void> {
     try {
       const optionsList = await Promise.all(
-        Array.from({ length: count }, () => this.getMachineCreationOptions())
+        Array.from({ length: count }, () => this.getMachineCreationOptions()),
       );
 
       // Fly API에 병렬로 머신 생성 요청
-      const machines = await Promise.all(optionsList.map(opt => this.flyClient.createMachine(opt, 0)));
-      const validMachines = machines.filter(m => m && m.id);
+      const machines = await Promise.all(
+        optionsList.map((opt) => this.flyClient.createMachine(opt, 0)),
+      );
+      const validMachines = machines.filter((m) => m?.id);
       if (validMachines.length > 0) {
         // DB에 한꺼번에 저장 (항상 트랜잭션 사용)
         await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
           await tx.machine_pool.createMany({
             data: validMachines.map((m: any) => ({
               machine_id: m.id,
-              ipv6: m.private_ip || '',
+              ipv6: m.private_ip || "",
               deleted: false,
               is_available: true,
               created_at: new Date(m.created_at || Date.now()),
@@ -203,7 +206,7 @@ export class MachinePool {
         });
       }
     } catch (error) {
-      console.error('Error creating new machines:', error);
+      console.error("Error creating new machines:", error);
     }
   }
 
@@ -214,8 +217,8 @@ export class MachinePool {
     try {
       const options = await this.getMachineCreationOptions();
       const machine = await this.flyClient.createMachine(options, 0);
-      if (!machine || !machine.id) {
-        console.error('Failed to create new machine');
+      if (!machine?.id) {
+        console.error("Failed to create new machine");
         return null;
       }
 
@@ -232,20 +235,20 @@ export class MachinePool {
         const created = await tx.machine_pool.create({
           data: {
             machine_id: machine.id,
-            ipv6: machine.private_ip || '',
+            ipv6: machine.private_ip || "",
             deleted: false,
             is_available: false,
             assigned_to: userId,
             assigned_at: new Date(),
             created_at: new Date(machine.created_at || Date.now()),
-          }
+          },
         });
         return created.machine_id;
       });
 
       return result;
     } catch (error) {
-      console.error('Error creating and assigning new machine:', error);
+      console.error("Error creating and assigning new machine:", error);
       return null;
     }
   }
@@ -274,8 +277,7 @@ export class MachinePool {
           RETURNING machine_id
         `;
 
-        if (!result || !Array.isArray(result) || result.length === 0) {
-          console.log('No available machines in the pool');
+        if (!(result && Array.isArray(result)) || result.length === 0) {
           return null;
         }
 
@@ -292,7 +294,7 @@ export class MachinePool {
         return machineId;
       });
     } catch (error) {
-      console.error('Error getting machine from pool:', error);
+      console.error("Error getting machine from pool:", error);
       return null;
     }
   }
@@ -300,31 +302,33 @@ export class MachinePool {
   /**
    * Get machine assignment information
    */
-  async getMachineAssignment(machineId: string): Promise<{ assigned_to: string | null; assigned_at: Date | null } | null> {
+  async getMachineAssignment(
+    machineId: string,
+  ): Promise<{ assigned_to: string | null; assigned_at: Date | null } | null> {
     try {
       return await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         const machine = await tx.machine_pool.findFirst({
           where: { machine_id: machineId },
-          select: { assigned_to: true, assigned_at: true }
+          select: { assigned_to: true, assigned_at: true },
         });
 
         if (!machine) {
           return {
             assigned_to: null,
-            assigned_at: null
+            assigned_at: null,
           };
         }
 
         return {
           assigned_to: machine.assigned_to,
-          assigned_at: machine.assigned_at
+          assigned_at: machine.assigned_at,
         };
       });
     } catch (error) {
-      console.error('Error getting machine assignment:', error);
+      console.error("Error getting machine assignment:", error);
       return {
         assigned_to: null,
-        assigned_at: null
+        assigned_at: null,
       };
     }
   }
@@ -332,15 +336,17 @@ export class MachinePool {
   /**
    * Returns all non-deleted machines from the database.
    */
-  async listMachines(): Promise<{
-    machine_id: string;
-    ipv6: string | null;
-    deleted: boolean;
-    assigned_to: string | null;
-    assigned_at: Date | null;
-    is_available: boolean;
-    created_at: Date;
-  }[]> {
+  async listMachines(): Promise<
+    {
+      machine_id: string;
+      ipv6: string | null;
+      deleted: boolean;
+      assigned_to: string | null;
+      assigned_at: Date | null;
+      is_available: boolean;
+      created_at: Date;
+    }[]
+  > {
     return await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       return await tx.machine_pool.findMany({
         where: { deleted: false },
@@ -377,7 +383,7 @@ export class MachinePool {
       return await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         const machine = await tx.machine_pool.findFirst({
           where: { machine_id: machineId },
-          select: { ipv6: true }
+          select: { ipv6: true },
         });
         return machine?.ipv6 || null;
       });
@@ -405,7 +411,7 @@ export class MachinePool {
       });
       return result;
     } catch (error) {
-      console.error('Error soft deleting machine:', error);
+      console.error("Error soft deleting machine:", error);
       return false;
     }
   }

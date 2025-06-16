@@ -1,9 +1,9 @@
 import process from "node:process";
 import { ContainerServer } from "@/server";
 import dotenv from "dotenv";
-import { MachinePool } from "./src/fly/machinePool";
-import { FlyClient } from "./src/fly";
-import { GitLabPoller, GitLabConfig } from "./src/gitlab/index.js";
+import { FlyClient } from "./src/fly/client.ts";
+import { MachinePool } from "./src/fly/machinePool.ts";
+import { type GitLabConfig, GitLabPoller } from "./src/gitlab/index.ts";
 
 // Load environment variables from .env file
 dotenv.config();
@@ -21,18 +21,18 @@ function main() {
     agentUid: 2000,
   };
 
-  console.info("container agent started with " + config.processGroup + " mode");
+  console.info(`container agent started with ${config.processGroup} mode`);
 
   if (config.processGroup === "scheduler") {
     const flyClient = new FlyClient({
-      apiToken: process.env.FLY_API_TOKEN || '',
-      appName: process.env.TARGET_APP_NAME || '',
-      imageRef: process.env.FLY_IMAGE_REF
+      apiToken: process.env.FLY_API_TOKEN || "",
+      appName: process.env.TARGET_APP_NAME || "",
+      imageRef: process.env.FLY_IMAGE_REF,
     });
 
     const machinePool = new MachinePool(flyClient, {
-      defaultPoolSize: parseInt(process.env.DEFAULT_POOL_SIZE || '20'),
-      checkInterval: parseInt(process.env.CHECK_INTERVAL || '60000')
+      defaultPoolSize: Number.parseInt(process.env.DEFAULT_POOL_SIZE || "20"),
+      checkInterval: Number.parseInt(process.env.CHECK_INTERVAL || "60000"),
     });
 
     machinePool.start().catch(console.error);
@@ -52,31 +52,31 @@ function main() {
   } else if (config.processGroup === "gitlab-poller") {
     // GitLab poller process
     const gitlabConfig: GitLabConfig = {
-      url: process.env.GITLAB_URL || '',
-      token: process.env.GITLAB_TOKEN || '',
-      pollInterval: parseInt(process.env.GITLAB_POLL_INTERVAL_MINUTES || '5')
+      url: process.env.GITLAB_URL || "",
+      token: process.env.GITLAB_TOKEN || "",
+      pollInterval: Number.parseInt(process.env.GITLAB_POLL_INTERVAL_MINUTES || "5"),
     };
 
-    if (!gitlabConfig.url || !gitlabConfig.token) {
-      console.error('GITLAB_URL and GITLAB_TOKEN environment variables are required');
+    if (!(gitlabConfig.url && gitlabConfig.token)) {
+      console.error("GITLAB_URL and GITLAB_TOKEN environment variables are required");
       process.exit(1);
     }
 
     const flyClient = new FlyClient({
-      apiToken: process.env.FLY_API_TOKEN || '',
-      appName: process.env.TARGET_APP_NAME || '',
-      imageRef: process.env.FLY_IMAGE_REF
+      apiToken: process.env.FLY_API_TOKEN || "",
+      appName: process.env.TARGET_APP_NAME || "",
+      imageRef: process.env.FLY_IMAGE_REF,
     });
 
     // Use existing MachinePool with minimal changes
     const machinePool = new MachinePool(flyClient, {
-      defaultPoolSize: parseInt(process.env.DEFAULT_POOL_SIZE || '20')
+      defaultPoolSize: Number.parseInt(process.env.DEFAULT_POOL_SIZE || "20"),
     });
 
     const gitlabPoller = new GitLabPoller(gitlabConfig, machinePool);
 
     gitlabPoller.start().catch((error) => {
-      console.error('Failed to start GitLab poller:', error);
+      console.error("Failed to start GitLab poller:", error);
       process.exit(1);
     });
 

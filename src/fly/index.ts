@@ -1,15 +1,15 @@
-import { FlyClient } from './client';
+import { FlyClient } from "./client.ts";
 import type {
-  Machine,
-  MachineMap,
   CreateMachineOptions,
   FlyConfig,
+  Machine,
   MachineConfig,
-  MachineService,
-  MachinePort,
+  MachineMap,
   MachineMount,
+  MachinePort,
   MachineResources,
-} from './types';
+  MachineService,
+} from "./types.ts";
 
 export {
   FlyClient,
@@ -27,7 +27,7 @@ export {
 // Create a singleton instance for backward compatibility
 let flyClient: FlyClient | null = null;
 
-export async function initializeFlyClient(config: FlyConfig): Promise<FlyClient> {
+export function initializeFlyClient(config: FlyConfig): FlyClient {
   if (!flyClient) {
     flyClient = new FlyClient(config);
   }

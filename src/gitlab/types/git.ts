@@ -46,7 +46,7 @@ export interface GitLabMergeRequest {
   project_id: number;
   title: string;
   description: string;
-  state: 'opened' | 'closed' | 'merged';
+  state: "opened" | "closed" | "merged";
   draft: boolean;
   source_branch: string;
   target_branch: string;

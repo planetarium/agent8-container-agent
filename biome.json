@@ -5,7 +5,7 @@
     "clientKind": "git"
   },
   "files": {
-    "ignore": ["protocol"]
+    "ignore": ["protocol", "pty-wrapper", "scripts", "merge-dependencies.js"]
   },
   "formatter": {
     "useEditorconfig": true
@@ -22,7 +22,18 @@
           "options": {
             "allow": ["debug", "info", "warn", "error"]
           }
-        }
+        },
+        "noExplicitAny": "off"
+      },
+      "performance": {
+        "noBarrelFile": "off"
+      },
+      "complexity": {
+        "noExcessiveCognitiveComplexity": "off"
+      },
+      "style": {
+        "useNamingConvention": "off",
+        "noParameterProperties": "off"
       }
     }
   }

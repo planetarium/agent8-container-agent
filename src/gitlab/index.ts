@@ -1,16 +1,24 @@
-export { GitLabPoller } from './services/gitlabPoller.js';
-export { GitLabClient } from './services/gitlabClient.js';
-export { GitLabContainerService } from './services/gitlabContainerService.js';
-export { GitLabTaskDelegationService } from './services/gitlabTaskDelegationService.js';
-export { GitLabLabelService } from './services/gitlabLabelService.js';
-export { GitLabIssueRepository } from './repositories/gitlabIssueRepository.js';
-export { ContainerTrigger } from './triggers/containerTrigger.js';
-export { GitLabApiRoutes } from './api/gitlabApiRoutes.js';
-export { IssueLifecycleWorkflow } from './workflows/issueLifecycleWorkflow.js';
-export { GitLabCommentFormatter } from './utils/commentFormatter.js';
+export { GitLabPoller } from "./services/gitlabPoller.js";
+export { GitLabClient } from "./services/gitlabClient.js";
+export { GitLabContainerService } from "./services/gitlabContainerService.js";
+export { GitLabTaskDelegationService } from "./services/gitlabTaskDelegationService.js";
+export { GitLabLabelService } from "./services/gitlabLabelService.js";
+export { GitLabIssueRepository } from "./repositories/gitlabIssueRepository.js";
+export { ContainerTrigger } from "./triggers/containerTrigger.js";
+export { GitLabApiRoutes } from "./api/gitlabApiRoutes.js";
+export { IssueLifecycleWorkflow } from "./workflows/issueLifecycleWorkflow.js";
+export {
+  createComment,
+  createSuccessComment,
+  createActionFailureComment,
+  createCommitFailureComment,
+  createPushFailureComment,
+  createStatusUpdateComment,
+  createContainerCreatedComment,
+} from "./utils/commentFormatter.js";
 
-import { GitLabIssueRepository } from './repositories/gitlabIssueRepository.js';
-import { GitLabClient } from './services/gitlabClient.js';
+import { GitLabIssueRepository } from "./repositories/gitlabIssueRepository.js";
+import { GitLabClient } from "./services/gitlabClient.js";
 
 export type {
   GitLabIssue,
@@ -28,15 +36,15 @@ export type {
   LabelChangeEvent,
   LifecycleTransition,
   IssueRetryState,
-  LifecycleStats
-} from './types/index.js';
+  LifecycleStats,
+} from "./types/index.js";
 
 export type {
   CommentSection,
   ErrorDetails,
   SuccessDetails,
-  ContainerCreationDetails
-} from './utils/commentFormatter.js';
+  ContainerCreationDetails,
+} from "./utils/commentFormatter.js";
 
 // Health check utilities for system integration
 export const GitLabSystemHealth = {
@@ -47,7 +55,7 @@ export const GitLabSystemHealth = {
       await repo.getIssueStats();
       return true;
     } catch (error) {
-      console.error('Database connection failed:', error);
+      console.error("Database connection failed:", error);
       return false;
     }
   },
@@ -57,7 +65,7 @@ export const GitLabSystemHealth = {
       const client = new GitLabClient(url, token);
       return await client.testConnection();
     } catch (error) {
-      console.error('GitLab connection failed:', error);
+      console.error("GitLab connection failed:", error);
       return false;
     }
   },
@@ -76,8 +84,8 @@ export const GitLabSystemHealth = {
         hasGitLabToken: !!process.env.GITLAB_TOKEN,
         hasDatabaseUrl: !!process.env.DATABASE_URL,
         hasFlyApiToken: !!process.env.FLY_API_TOKEN,
-        processGroup: process.env.FLY_PROCESS_GROUP || 'app'
-      }
+        processGroup: process.env.FLY_PROCESS_GROUP || "app",
+      },
     };
-  }
+  },
 };

@@ -1,5 +1,5 @@
-import type { BoltActionData } from "./actions";
-import type { BoltArtifactData } from "./artifact";
+import type { BoltActionData } from "./actions.ts";
+import type { BoltArtifactData } from "./artifact.ts";
 
 export interface ParserCallbacks {
   onArtifactOpen?: (artifact: Partial<BoltArtifactData>) => void;

@@ -1,6 +1,6 @@
 import { Gitlab } from "@gitbeaker/rest";
+import type { GitLabMergeRequest, MergeRequestCreationOptions } from "../types/git.js";
 import type { GitLabIssue, GitLabProject, GitLabUser } from "../types/index.js";
-import type { MergeRequestCreationOptions, GitLabMergeRequest } from "../types/git.js";
 import type { GitLabComment } from "../types/index.js";
 
 export class GitLabClient {
@@ -40,7 +40,6 @@ export class GitLabClient {
     try {
       // Test connection by fetching current user projects
       const _projects = await this.gitlab.Projects.all({ owned: true, perPage: 1 });
-      console.log("Connected to GitLab successfully");
       return true;
     } catch (error) {
       console.error("GitLab connection failed:", error);
@@ -53,11 +52,7 @@ export class GitLabClient {
    */
   async getProject(projectId: number): Promise<GitLabProject> {
     try {
-      console.log(`[GitLab] Fetching project details for ID: ${projectId}`);
-
       const response = await this.gitlab.Projects.show(projectId);
-
-      console.log(`[GitLab] Successfully fetched project: ${response.name}`);
       return response as unknown as GitLabProject;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -71,11 +66,7 @@ export class GitLabClient {
    */
   async getUserById(userId: number): Promise<GitLabUser> {
     try {
-      console.log(`[GitLab] Fetching user details for ID: ${userId}`);
-
       const response = await this.gitlab.Users.show(userId);
-
-      console.log(`[GitLab] Successfully fetched user: ${response.username}`);
       return response as unknown as GitLabUser;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -89,11 +80,7 @@ export class GitLabClient {
    */
   async getGroup(groupId: number): Promise<{ id: number; name: string; owner_id?: number }> {
     try {
-      console.log(`[GitLab] Fetching group details for ID: ${groupId}`);
-
       const response = await this.gitlab.Groups.show(groupId);
-
-      console.log(`[GitLab] Successfully fetched group: ${response.name}`);
       return response as { id: number; name: string; owner_id?: number };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -129,8 +116,6 @@ export class GitLabClient {
       await this.gitlab.Issues.edit(projectId, issueIid, {
         labels: labels.join(","),
       });
-
-      console.log(`[GitLab] Updated labels for issue #${issueIid}: ${labels.join(", ")}`);
     } catch (error) {
       console.error(`[GitLab] Failed to update labels for issue #${issueIid}:`, error);
       throw error;
@@ -164,10 +149,6 @@ export class GitLabClient {
 
   async createMergeRequest(options: MergeRequestCreationOptions): Promise<GitLabMergeRequest> {
     try {
-      console.log(
-        `[GitLab-API] Creating merge request: ${options.sourceBranch} -> ${options.targetBranch}`,
-      );
-
       const mergeRequest = await this.gitlab.MergeRequests.create(
         options.projectId,
         options.sourceBranch,
@@ -180,11 +161,9 @@ export class GitLabClient {
           allowCollaboration: true,
         },
       );
-
-      console.log(`[GitLab-API] Merge request created successfully: !${mergeRequest.iid}`);
       return mergeRequest as GitLabMergeRequest;
     } catch (error) {
-      console.error(`[GitLab-API] Failed to create merge request:`, error);
+      console.error("[GitLab-API] Failed to create merge request:", error);
       throw error;
     }
   }
@@ -194,8 +173,6 @@ export class GitLabClient {
    */
   async getUserEmail(userId: number, username: string): Promise<string> {
     try {
-      console.log(`[GitLab] Fetching user email for ID: ${userId}`);
-
       const response = await fetch(`${this.baseUrl}/api/v4/users/${userId}`, {
         headers: {
           "PRIVATE-TOKEN": this.token,
@@ -206,14 +183,14 @@ export class GitLabClient {
         throw new Error(`Failed to fetch user details: ${response.status} ${response.statusText}`);
       }
 
-      const user = await response.json() as { email?: string; public_email?: string };
+      const user = (await response.json()) as { email?: string; public_email?: string };
       const userEmail = user.email || user.public_email;
 
       if (!userEmail) {
-        throw new Error(`Could not retrieve email address for user ${username} (ID: ${userId}). Email is required for container authentication. Please ensure the user has a public email or the GitLab token has admin privileges.`);
+        throw new Error(
+          `Could not retrieve email address for user ${username} (ID: ${userId}). Email is required for container authentication. Please ensure the user has a public email or the GitLab token has admin privileges.`,
+        );
       }
-
-      console.log(`[GitLab] Successfully fetched user email: ${userEmail}`);
       return userEmail;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -227,8 +204,6 @@ export class GitLabClient {
    */
   async getGroupOwner(groupId: number): Promise<string> {
     try {
-      console.log(`[GitLab] Getting group owner for group: ${groupId}`);
-
       const group = await this.getGroup(groupId);
 
       if (group.owner_id) {
@@ -236,12 +211,9 @@ export class GitLabClient {
         const ownerEmail = owner.email || owner.public_email;
 
         if (ownerEmail) {
-          console.log(`[GitLab] Found group owner email: ${ownerEmail}`);
           return ownerEmail;
         }
       }
-
-      console.log("[GitLab] No direct owner found, looking for maintainers");
       throw new Error("No suitable group owner or maintainer found");
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -255,8 +227,6 @@ export class GitLabClient {
    */
   async getProjectOwnerEmail(projectId: number): Promise<string> {
     try {
-      console.log(`[GitLab] Getting project owner email for project: ${projectId}`);
-
       const project = await this.getProject(projectId);
 
       if (project.namespace.kind === "user") {

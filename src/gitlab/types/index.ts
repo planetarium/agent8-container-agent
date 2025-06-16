@@ -4,7 +4,7 @@ export interface GitLabIssue {
   project_id: number;
   title: string;
   description: string | null;
-  state: 'opened' | 'closed';
+  state: "opened" | "closed";
   created_at: string;
   updated_at: string;
   closed_at: string | null;
@@ -136,7 +136,7 @@ export interface IssueState {
 
 export interface IssueChangeEvent {
   issueIid: number;
-  changeType: 'label' | 'comment' | 'status';
+  changeType: "label" | "comment" | "status";
   previousState: IssueState;
   currentState: IssueState;
   timestamp: Date;
@@ -149,7 +149,7 @@ export interface GitLabProject {
   path_with_namespace: string;
   description: string | null;
   default_branch: string;
-  visibility: 'private' | 'internal' | 'public';
+  visibility: "private" | "internal" | "public";
   owner?: {
     id: number;
     username: string;
@@ -160,7 +160,7 @@ export interface GitLabProject {
     id: number;
     name: string;
     path: string;
-    kind: 'user' | 'group';
+    kind: "user" | "group";
     full_path: string;
     owner?: {
       id: number;
@@ -195,10 +195,10 @@ export interface GitLabUser {
 }
 
 // Task Delegation Types
-export * from './taskDelegation.js';
+export * from "./taskDelegation.ts";
 
 // Lifecycle Management Types
-export * from './lifecycle.js';
+export * from "./lifecycle.ts";
 
 // Git Management Types
-export * from './git.js';
+export * from "./git.ts";

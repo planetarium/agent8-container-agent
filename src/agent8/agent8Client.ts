@@ -1,36 +1,30 @@
-import type {
-  ReasoningUIPart,
-  SourceUIPart,
-  StepStartUIPart,
-  TextUIPart,
-  ToolInvocationUIPart,
-  UIMessage,
-} from "@ai-sdk/ui-utils";
-import type { ContainerServer } from "../server";
-import type {
-  ActionCallbacks,
-  ActionResult,
-  BoltAction,
-  ParserCallbacks,
-} from "./index";
-import { ActionRunner, StreamingMessageParser } from "./index";
-import { GitLabClient } from '../gitlab/services/gitlabClient.js';
-import { GitLabGitService } from '../gitlab/services/gitlabGitService.js';
-import { GitLabLabelService } from '../gitlab/services/gitlabLabelService.js';
-import { GitLabIssueRepository } from '../gitlab/repositories/gitlabIssueRepository.js';
-import { IssueLifecycleWorkflow } from '../gitlab/workflows/issueLifecycleWorkflow.js';
-import type { GitLabInfo } from '../gitlab/types/api.js';
-import type { GitLabIssue, GitLabComment, IssueState } from '../gitlab/types/index.js';
-import type { LabelChangeEvent } from '../gitlab/types/lifecycle.js';
-import type { GitCommitPushResult, GitCommitResult } from '../gitlab/types/git.js';
-import type { IssueCompletionEvent } from '../gitlab/workflows/issueLifecycleWorkflow.js';
-import type { FileMap } from './types/fileMap.js';
-import { FileMapBuilder } from './utils/fileMapBuilder.js';
-import { GitLabCommentFormatter } from '../gitlab/utils/commentFormatter.js';
-import type { ErrorDetails, SuccessDetails } from '../gitlab/utils/commentFormatter.js';
-import { promises as fs } from 'fs';
-import path from 'path';
-
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import type { UIMessage } from "@ai-sdk/ui-utils";
+import { GitLabIssueRepository } from "../gitlab/repositories/gitlabIssueRepository.js";
+import { GitLabClient } from "../gitlab/services/gitlabClient.js";
+import { GitLabGitService } from "../gitlab/services/gitlabGitService.js";
+import { GitLabLabelService } from "../gitlab/services/gitlabLabelService.js";
+import type { GitLabInfo } from "../gitlab/types/api.js";
+import type { GitCommitPushResult, GitCommitResult } from "../gitlab/types/git.js";
+import type { GitLabIssue, IssueState } from "../gitlab/types/index.js";
+import type { LabelChangeEvent } from "../gitlab/types/lifecycle.js";
+import {
+  createActionFailureComment,
+  createComment,
+  createCommitFailureComment,
+  createPushFailureComment,
+  createSuccessComment,
+} from "../gitlab/utils/commentFormatter.js";
+import type { ErrorDetails, SuccessDetails } from "../gitlab/utils/commentFormatter.js";
+import { IssueLifecycleWorkflow } from "../gitlab/workflows/issueLifecycleWorkflow.js";
+import type { IssueCompletionEvent } from "../gitlab/workflows/issueLifecycleWorkflow.js";
+import type { ContainerServer } from "../server.ts";
+import type { ActionCallbacks, ActionResult, BoltAction, ParserCallbacks } from "./index.ts";
+import { ActionRunner, StreamingMessageParser } from "./index.ts";
+import type { FileMap } from "./types/fileMap.js";
+import { FileMapBuilder } from "./utils/fileMapBuilder.js";
+import { convertToUIMessages } from "./utils/messageUtils.js";
 
 interface TaskResponseData {
   taskId: string;
@@ -42,7 +36,7 @@ interface TaskResponseData {
     url: string;
     method: string;
     headers: Record<string, string>;
-    payload: string;  // JSON stringified full request
+    payload: string; // JSON stringified full request
     sentAt: string;
   };
 
@@ -51,7 +45,7 @@ interface TaskResponseData {
     status: number;
     statusText: string;
     headers: Record<string, string>;
-    rawContent: string;  // Full AI SDK Data Stream
+    rawContent: string; // Full AI SDK Data Stream
     receivedAt: string;
     duration: number;
     streaming: boolean;
@@ -95,56 +89,6 @@ interface Task {
   progress?: number;
 }
 
-class MessageConverter {
-  static convertToUIMessages(messages: any[]): UIMessage[] {
-    return messages.map((msg) => {
-      const role = msg.role || "user";
-      const id = msg.id || MessageConverter.generateMessageId();
-
-      let content = "";
-      if (typeof msg.content === "string") {
-        content = msg.content;
-      } else if (msg.text) {
-        content = msg.text;
-      } else if (msg.message) {
-        content = msg.message;
-      } else if (Array.isArray(msg.content)) {
-        content = msg.content
-          .filter((part: any) => part.type === "text")
-          .map((part: any) => part.text || "")
-          .join("");
-      }
-
-      const parts: Array<
-        TextUIPart | ReasoningUIPart | ToolInvocationUIPart | SourceUIPart | StepStartUIPart
-      > = msg.parts || [
-        {
-          type: "text",
-          text: content,
-        },
-      ];
-
-      const convertedMessage: UIMessage = {
-        id,
-        role: role as "system" | "user" | "assistant" | "data",
-        content,
-        parts,
-        ...(msg.annotations && { annotations: msg.annotations }),
-        ...(msg.createdAt && { createdAt: msg.createdAt }),
-        ...(msg.experimental_attachments && {
-          experimental_attachments: msg.experimental_attachments,
-        }),
-      };
-
-      return convertedMessage;
-    });
-  }
-
-  private static generateMessageId(): string {
-    return `msg_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-  }
-}
-
 export class Agent8Client {
   private tasks: Map<string, Task> = new Map();
   private readonly actionRunner: ActionRunner;
@@ -158,50 +102,38 @@ export class Agent8Client {
   private readonly POLLING_INTERVAL = 30000; // 30 seconds
 
   constructor(containerServer: ContainerServer, workdir: string) {
-    console.log(`[Agent8] Initializing - workdir: ${workdir}`);
-
     // Validate GitLab configuration
-    if (!process.env.GITLAB_URL || !process.env.GITLAB_TOKEN) {
+    if (!(process.env.GITLAB_URL && process.env.GITLAB_TOKEN)) {
       throw new Error(
-        'GitLab configuration required: GITLAB_URL and GITLAB_TOKEN environment variables must be set'
+        "GitLab configuration required: GITLAB_URL and GITLAB_TOKEN environment variables must be set",
       );
     }
 
     // Create ActionRunner with callbacks for progress tracking
     const actionCallbacks: ActionCallbacks = {
-      onStart: (action) => {
-        console.log(`[Agent8] Action started: ${action.type}`);
-        console.log(`[Agent8] Action details:`, JSON.stringify(action, null, 2));
+      onStart: (_action) => {
+        console.info(`[Agent8] Action started: ${_action.type}`);
       },
-      onComplete: (action, result) => {
-        console.log(`[Agent8] Action completed: ${action.type}`, result.success ? "✅" : "❌");
-        if (result.output) {
-          console.log(`[Agent8] Action output:`, result.output);
-        }
+      onComplete: (_action, result) => {
         if (!result.success && result.error) {
-          console.log(`[Agent8] Action error:`, result.error);
+          console.error(`[Agent8] Action failed: ${_action.type}`, result.error);
         }
       },
       onError: (action, error: any) => {
         console.error(`[Agent8] Action failed: ${action.type}`, error);
-        console.error(`[Agent8] Error stack:`, error instanceof Error ? error.stack : "No stack info");
+        console.error(
+          "[Agent8] Error stack:",
+          error instanceof Error ? error.stack : "No stack info",
+        );
       },
     };
 
     this.actionRunner = new ActionRunner(containerServer, workdir, actionCallbacks);
-    console.log(`[Agent8] ActionRunner initialization completed`);
-
-    // Initialize GitLab services (required)
-    console.log(`[Agent8] Initializing GitLab services`);
     this.gitlabClient = new GitLabClient(process.env.GITLAB_URL, process.env.GITLAB_TOKEN);
 
     // Use specified branch, default to 'develop'
-    const branch = process.env.GITLAB_BRANCH || 'develop';
-    console.log(`[Agent8] Using branch: ${branch}`);
+    const branch = process.env.GITLAB_BRANCH || "develop";
     this.gitlabGitService = new GitLabGitService(this.gitlabClient, workdir, branch);
-
-    // Initialize FileMapBuilder
-    console.log(`[Agent8] Initializing FileMapBuilder`);
     this.fileMapBuilder = new FileMapBuilder(workdir);
 
     // Initialize lifecycle workflow dependencies
@@ -209,74 +141,40 @@ export class Agent8Client {
     const gitlabLabelService = new GitLabLabelService(this.gitlabClient, gitlabIssueRepository);
 
     // Initialize IssueLifecycleWorkflow with proper dependencies
-    this.lifecycleWorkflow = new IssueLifecycleWorkflow(
-      gitlabLabelService,
-      gitlabIssueRepository
-    );
+    this.lifecycleWorkflow = new IssueLifecycleWorkflow(gitlabLabelService, gitlabIssueRepository);
 
     // Register issue completion event listener
     this.lifecycleWorkflow.onIssueCompletion(this.handleIssueCompletionEvent.bind(this));
-
-    console.log(`[Agent8] GitLab services and lifecycle workflow initialized`);
   }
 
   async createTask(request: any): Promise<string> {
     const taskId = this.generateTaskId();
-    const startTime = Date.now();
-
-    console.log(`[Agent8] Creating new task: ${taskId}`);
     // Validate GitLab info is provided (required for Agent8Client)
     if (!request.gitlabInfo) {
-      throw new Error('GitLab info is required for Agent8Client operation');
+      throw new Error("GitLab info is required for Agent8Client operation");
     }
-
-    console.log(`[Agent8] Task request info:`, {
-      userId: request.userId,
-      targetServerUrl: request.targetServerUrl,
-      messagesCount: request.messages?.length || 0,
-      projectId: request.gitlabInfo.projectId,
-      issueIid: request.gitlabInfo.issueIid,
-      promptId: request.promptId,
-      contextOptimization: request.contextOptimization,
-    });
-
-    // Perform GitLab git checkout (required)
-    console.log(`[Agent8] Performing git checkout for issue #${request.gitlabInfo.issueIid}`);
-
-    // Start issue monitoring
-    console.log(`[Agent8] Starting issue monitoring for issue #${request.gitlabInfo.issueIid}`);
     await this.startIssueMonitoring(request.gitlabInfo);
 
     try {
       const gitResult = await this.gitlabGitService.checkoutRepositoryForIssue(
         request.gitlabInfo.projectId,
-        request.gitlabInfo.issueIid
+        request.gitlabInfo.issueIid,
       );
-      console.log(`[Agent8] Git checkout completed:`, {
-        success: gitResult.success,
-        clonedRepository: gitResult.clonedRepository,
-        createdBranch: gitResult.createdBranch,
-        hasMergeRequest: !!gitResult.createdMergeRequest,
-      });
       if (gitResult.createdMergeRequest) {
-        console.log(`[Agent8] Draft MR created: ${gitResult.createdMergeRequest.web_url}`);
+        console.info(`[Agent8] Git checkout successful: ${gitResult.createdMergeRequest}`);
       }
     } catch (error) {
-      console.error(`[Agent8] Git checkout failed:`, error);
+      console.error("[Agent8] Git checkout failed:", error);
       // Continue with task execution even if git checkout fails
     }
-
-    // Build FileMap from GitLab checkout (always required)
-    console.log(`[Agent8] Building FileMap from local checkout`);
     const files = await this.buildFileMapFromWorkdir();
-    console.log(`[Agent8] FileMap built successfully with ${Object.keys(files).length} files`);
 
     const chatRequest: ChatRequest = {
       userId: request.userId,
       token: request.token,
       targetServerUrl: request.targetServerUrl,
       cookies: request.cookies,
-      messages: MessageConverter.convertToUIMessages(request.messages || []),
+      messages: convertToUIMessages(request.messages || []),
       files: files,
       promptId: request.promptId,
       contextOptimization: request.contextOptimization,
@@ -292,12 +190,13 @@ export class Agent8Client {
     };
 
     this.tasks.set(taskId, task);
-    console.log(`[Agent8] Task created: ${taskId} (took ${Date.now() - startTime}ms)`);
-    console.log(`[Agent8] Current active tasks: ${this.tasks.size}`);
 
     this.executeTask(taskId, chatRequest).catch((error) => {
       console.error(`[Agent8] Task ${taskId} execution failed:`, error);
-      console.error(`[Agent8] Error stack:`, error instanceof Error ? error.stack : "No stack info");
+      console.error(
+        "[Agent8] Error stack:",
+        error instanceof Error ? error.stack : "No stack info",
+      );
       this.updateTaskStatus(taskId, "failed", undefined, error.message);
     });
 
@@ -306,46 +205,28 @@ export class Agent8Client {
 
   private async executeTask(taskId: string, request: ChatRequest): Promise<void> {
     const startTime = Date.now();
-    console.log(`[Agent8] Task ${taskId} execution started`);
 
     try {
-      // Step 1: Start task execution
-      console.log(`[Agent8] Task ${taskId} - Step 1: Setting status to running`);
       this.updateTaskStatus(taskId, "running", 10);
-
-      // Step 2: Call LLM server
-      console.log(`[Agent8] Task ${taskId} - Step 2: LLM server call started`);
       const llmStartTime = Date.now();
       const { response, requestData } = await this.callLLMServer(request);
-      const llmDuration = Date.now() - llmStartTime;
-      console.log(`[Agent8] Task ${taskId} - LLM server call completed (took ${llmDuration}ms)`);
+      const _llmDuration = Date.now() - llmStartTime;
 
       this.updateTaskStatus(taskId, "running", 30);
-
-      // Step 3: Process response
-      console.log(`[Agent8] Task ${taskId} - Step 3: Response processing started`);
       const processStartTime = Date.now();
       const result = await this.processResponse(taskId, { response, requestData }, request);
-      const processDuration = Date.now() - processStartTime;
-      console.log(`[Agent8] Task ${taskId} - Response processing completed (took ${processDuration}ms)`);
+      const _processDuration = Date.now() - processStartTime;
 
       this.updateTaskStatus(taskId, "completed", 100, undefined, result);
 
-      const totalDuration = Date.now() - startTime;
-      console.log(`[Agent8] Task ${taskId} fully completed!`);
-      console.log(`[Agent8] Task ${taskId} total duration: ${totalDuration}ms`);
-      console.log(`[Agent8] Task ${taskId} final results:`, {
-        textChunksLength: result.textChunks?.length || 0,
-        artifactsCount: result.artifacts?.length || 0,
-        actionsCount: result.actions?.length || 0,
-        executedActions: result.executedActions || 0,
-        failedActions: result.failedActions || 0,
-      });
-
+      const _totalDuration = Date.now() - startTime;
     } catch (error: any) {
       const totalDuration = Date.now() - startTime;
       console.error(`[Agent8] Task ${taskId} execution failed (took ${totalDuration}ms):`, error);
-      console.error(`[Agent8] Task ${taskId} error stack:`, error instanceof Error ? error.stack : "No stack info");
+      console.error(
+        `[Agent8] Task ${taskId} error stack:`,
+        error instanceof Error ? error.stack : "No stack info",
+      );
       this.updateTaskStatus(
         taskId,
         "failed",
@@ -355,9 +236,10 @@ export class Agent8Client {
     }
   }
 
-  private async callLLMServer(request: ChatRequest): Promise<{response: Response, requestData: any}> {
+  private async callLLMServer(
+    request: ChatRequest,
+  ): Promise<{ response: Response; requestData: any }> {
     const startTime = Date.now();
-    console.log(`[Agent8] LLM server call started:`, request.targetServerUrl);
 
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
@@ -368,7 +250,6 @@ export class Agent8Client {
 
     if (request.cookies) {
       cookieString = request.cookies;
-      console.log(`[Agent8] Using existing cookies: ${cookieString.substring(0, 50)}...`);
     }
 
     // Use provided token for backward compatibility with external services
@@ -379,7 +260,6 @@ export class Agent8Client {
       } else {
         cookieString = tokenCookie;
       }
-      console.log(`[Agent8] Token cookie added for LLM server authentication`);
     }
 
     if (cookieString) {
@@ -396,31 +276,17 @@ export class Agent8Client {
     };
 
     const payloadString = JSON.stringify(payload);
-    console.log(`[Agent8] Request payload size:`, payloadString.length, "bytes");
-    console.log(`[Agent8] Request message count:`, request.messages.length);
-    console.log(`[Agent8] Attached files count:`, Object.keys(request.files).length);
-    console.log(`[Agent8] Attached files list:`, Object.keys(request.files));
-
-    // Full payload content output (for debugging)
-    console.log(`[Agent8] Full request payload content:`);
-    console.log(payloadString);
-
-    // Message summary
-    console.log(`[Agent8] Message summary:`);
-    request.messages.forEach((msg, index) => {
-      console.log(`  ${index + 1}. ${msg.role}: ${msg.content.substring(0, 100)}${msg.content.length > 100 ? '...' : ''}`);
-    });
 
     // Use the token provided in the request for authentication
     const authHeaders = {
       ...headers,
-      'Authorization': `Bearer ${request.token}`,
+      Authorization: `Bearer ${request.token}`,
     };
 
     // Capture request data for response storage
     const requestData = {
       url: request.targetServerUrl,
-      method: 'POST',
+      method: "POST",
       headers: authHeaders,
       payload: payloadString,
       sentAt: new Date().toISOString(),
@@ -434,14 +300,11 @@ export class Agent8Client {
         signal: AbortSignal.timeout(10 * 60 * 1000),
       });
 
-      const duration = Date.now() - startTime;
-      console.log(`[Agent8] LLM server response received (took ${duration}ms)`);
-      console.log(`[Agent8] Response status:`, response.status, response.statusText);
-      console.log(`[Agent8] Response headers:`, Object.fromEntries(response.headers.entries()));
+      const _duration = Date.now() - startTime;
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => "Unknown error");
-        console.error(`[Agent8] LLM server request failed:`, {
+        console.error("[Agent8] LLM server request failed:", {
           status: response.status,
           statusText: response.statusText,
           errorText: errorText.substring(0, 500),
@@ -461,8 +324,8 @@ export class Agent8Client {
 
   private async processResponse(
     taskId: string,
-    responseData: { response: Response, requestData: any },
-    request: ChatRequest
+    responseData: { response: Response; requestData: any },
+    request: ChatRequest,
   ): Promise<any> {
     const startTime = Date.now();
     const { response, requestData } = responseData;
@@ -479,10 +342,10 @@ export class Agent8Client {
         headers: Object.fromEntries(response.headers.entries()),
         receivedAt: new Date().toISOString(),
         streaming: true,
-        rawContentFile: `${taskId}.raw`
+        rawContentFile: `${taskId}.raw`,
       },
       gitlabInfo: request.gitlabInfo,
-      processing: {}
+      processing: {},
     };
 
     await this.saveMetadata(taskId, initialMetadata);
@@ -506,31 +369,18 @@ export class Agent8Client {
     const callbacks: ParserCallbacks = {
       onTextChunk: (text) => {
         textChunks.push(text);
-        console.log(`[Agent8] Task ${taskId} - Text chunk received (length: ${text.length})`);
       },
-      onArtifactOpen: (artifact) => {
-        console.log(`[Agent8] Task ${taskId} - Artifact parsing started:`, artifact.title || "Unnamed");
-      },
+      onArtifactOpen: (_artifact) => {},
       onArtifactClose: (artifact) => {
         artifacts.push(artifact);
-        console.log(`[Agent8] Task ${taskId} - Artifact completed:`, {
-          title: artifact.title || "Unnamed",
-          type: artifact.type,
-          contentLength: artifact.content?.length || 0,
-        });
       },
-      onActionOpen: (action) => {
-        console.log(`[Agent8] Task ${taskId} - Action parsing started:`, action.type);
-      },
-      onActionStream: (chunk) => {
-        console.log(`[Agent8] Task ${taskId} - Action stream chunk received (length: ${chunk.length})`);
-      },
+      onActionOpen: (_action) => {},
+      onActionStream: (_chunk) => {},
       onActionClose: async (action) => {
         const actionStartTime = Date.now();
-        console.log(`[Agent8] Task ${taskId} - Action parsing completed, preparing execution:`, action.type);
 
         // Convert BoltActionData to BoltAction by ensuring all required fields are present
-        let fullAction: BoltAction = {
+        const fullAction: BoltAction = {
           type: action.type,
           content: action.content || "",
           // Preserve all optional fields from the original action
@@ -542,61 +392,39 @@ export class Agent8Client {
         // Handle missing command for shell actions
         if (action.type === "shell" && !action.command && action.content) {
           // Extract command from content (first line, trimmed)
-          const command = action.content.trim().split('\n')[0].trim();
+          const command = action.content.trim().split("\n")[0].trim();
           if (command) {
             fullAction.command = command;
-            console.log(`[Agent8] Task ${taskId} - Command extracted from content:`, command);
           }
         }
 
         actions.push(fullAction);
-        console.log(`[Agent8] Task ${taskId} - Action execution started:`, {
-          type: fullAction.type,
-          filePath: fullAction.filePath,
-          operation: fullAction.operation,
-          command: fullAction.command,
-          contentLength: fullAction.content.length,
-        });
 
         try {
           // Execute action immediately when parsing completes
           const result = await this.actionRunner.executeAction(fullAction);
-          const actionDuration = Date.now() - actionStartTime;
 
           actionResults.push(result);
-          console.log(`[Agent8] Task ${taskId} - Action execution completed (took ${actionDuration}ms):`, {
-            success: result.success,
-            hasOutput: !!result.output,
-            outputLength: result.output?.length || 0,
-            error: result.error,
-          });
 
           // Update task progress
           const progressIncrement = 50 / actions.length; // Allocate 50% progress for actions
-          const currentProgress = 30 + (actionResults.length * progressIncrement);
+          const currentProgress = 30 + actionResults.length * progressIncrement;
           this.updateTaskStatus(taskId, "running", Math.min(currentProgress, 95));
 
           // Check if this is the last action and trigger auto-commit/push
           if (actionResults.length === actions.length) {
-            console.log(`[Agent8] Task ${taskId} - All actions completed, checking auto-commit conditions`);
-
-            const allActionsSuccessful = actionResults.every(r => r.success);
+            const allActionsSuccessful = actionResults.every((r) => r.success);
 
             if (request.gitlabInfo && this.gitlabGitService) {
               if (allActionsSuccessful) {
-                console.log(`[Agent8] Task ${taskId} - Auto-commit triggered (all actions successful)`);
                 await this.performAutoCommitPush(taskId, request.gitlabInfo);
               } else {
-                console.log(`[Agent8] Task ${taskId} - Some actions failed, skipping auto-commit`);
                 await this.handleActionFailure(taskId, request.gitlabInfo, actionResults);
               }
             } else if (request.gitlabInfo) {
-              console.log(`[Agent8] Task ${taskId} - GitLab info provided but GitLabGitService not available`);
             } else {
-              console.log(`[Agent8] Task ${taskId} - No GitLab info provided, skipping auto-commit`);
             }
           }
-
         } catch (error: any) {
           const actionDuration = Date.now() - actionStartTime;
           const errorResult: ActionResult = {
@@ -604,15 +432,17 @@ export class Agent8Client {
             error: error instanceof Error ? error.message : String(error),
           };
           actionResults.push(errorResult);
-          console.error(`[Agent8] Task ${taskId} - Action execution failed (took ${actionDuration}ms):`, {
-            actionType: fullAction.type,
-            error: error instanceof Error ? error.message : String(error),
-            stack: error instanceof Error ? error.stack : "No stack info",
-          });
+          console.error(
+            `[Agent8] Task ${taskId} - Action execution failed (took ${actionDuration}ms):`,
+            {
+              actionType: fullAction.type,
+              error: error instanceof Error ? error.message : String(error),
+              stack: error instanceof Error ? error.stack : "No stack info",
+            },
+          );
 
           // Check if this is the last action and handle failure
           if (actionResults.length === actions.length && request.gitlabInfo) {
-            console.log(`[Agent8] Task ${taskId} - All actions completed with failures`);
             await this.handleActionFailure(taskId, request.gitlabInfo, actionResults);
           }
         }
@@ -620,13 +450,11 @@ export class Agent8Client {
     };
 
     const parser = new StreamingMessageParser({ callbacks });
-    console.log(`[Agent8] Task ${taskId} - Starting streaming reader`);
 
     try {
       while (true) {
         const { done, value } = await reader.read();
         if (done) {
-          console.log(`[Agent8] Task ${taskId} - Streaming completed: ${chunkCount} chunks, ${totalBytes} bytes`);
           break;
         }
 
@@ -638,14 +466,13 @@ export class Agent8Client {
         await this.appendToRawFile(rawFile, chunk);
 
         if (chunkCount % 10 === 0) {
-          console.log(`[Agent8] Task ${taskId} - Streaming: ${chunkCount} chunks, ${totalBytes} bytes`);
         }
 
         // Force garbage collection for large streams (every 50 chunks)
         if (chunkCount % 50 === 0) {
-          if (typeof global.gc === 'function') {
+          if (typeof global.gc === "function") {
             global.gc();
-          } else if (typeof Bun !== 'undefined' && typeof Bun.gc === 'function') {
+          } else if (typeof Bun !== "undefined" && typeof Bun.gc === "function") {
             Bun.gc(true);
           }
         }
@@ -653,22 +480,18 @@ export class Agent8Client {
 
       // Finalize raw file
       await this.finalizeRawFile(rawFile);
-
-      // Read content from file for final parsing (memory optimized)
-      console.log(`[Agent8] Task ${taskId} - Reading content from file for parsing (${totalBytes} bytes)`);
       const rawContent = await this.loadRawContent(taskId);
 
       if (!rawContent) {
-        throw new Error('Failed to read raw content from file for parsing');
+        throw new Error("Failed to read raw content from file for parsing");
       }
 
       const parseStartTime = Date.now();
       const result = parser.parseDataStream("stream", rawContent);
-      const parseDuration = Date.now() - parseStartTime;
-      console.log(`[Agent8] Task ${taskId} - Parsing completed (${parseDuration}ms)`);
+      const _parseDuration = Date.now() - parseStartTime;
 
       // Clear rawContent from memory after parsing (memory optimization)
-      const rawContentLength = rawContent.length;
+      const _rawContentLength = rawContent.length;
       // rawContent is no longer needed in memory, file contains the data
 
       const totalDuration = Date.now() - startTime;
@@ -681,8 +504,8 @@ export class Agent8Client {
         artifacts,
         actions,
         actionResults,
-        executedActions: actionResults.filter(r => r.success).length,
-        failedActions: actionResults.filter(r => !r.success).length,
+        executedActions: actionResults.filter((r) => r.success).length,
+        failedActions: actionResults.filter((r) => !r.success).length,
         timestamp: new Date().toISOString(),
         processed: true,
         type: "chat-response",
@@ -701,7 +524,7 @@ export class Agent8Client {
           duration: totalDuration,
           streaming: false,
           contentLength: totalBytes,
-          chunkCount
+          chunkCount,
         },
         processing: {
           artifactsCount: artifacts.length,
@@ -709,14 +532,11 @@ export class Agent8Client {
           executedActions: finalResult.executedActions,
           failedActions: finalResult.failedActions,
           textChunksLength: finalResult.textChunks.length,
-          completedAt: new Date().toISOString()
-        }
+          completedAt: new Date().toISOString(),
+        },
       };
 
       await this.saveMetadata(taskId, finalMetadata);
-
-      console.log(`[Agent8] Task ${taskId} - Processing completed (${totalDuration}ms, memory optimized)`);
-      console.log(`[Agent8] Task ${taskId} - Results: ${artifacts.length} artifacts, ${actions.length} actions, ${finalResult.executedActions} successful`);
 
       return finalResult;
     } finally {
@@ -726,21 +546,10 @@ export class Agent8Client {
   }
 
   async getTaskStatus(taskId: string, userId: string): Promise<Task | null> {
-    console.log(`[Agent8] Task status query: ${taskId} (user: ${userId})`);
     const task = this.tasks.get(taskId);
     if (!task || task.userId !== userId) {
-      console.log(`[Agent8] Task query result: Not found or no permission`);
       return null;
     }
-    console.log(`[Agent8] Task status:`, {
-      id: task.id,
-      status: task.status,
-      progress: task.progress,
-      createdAt: task.createdAt,
-      completedAt: task.completedAt,
-      hasError: !!task.error,
-      hasResult: !!task.result,
-    });
     return task;
   }
 
@@ -757,8 +566,8 @@ export class Agent8Client {
       return;
     }
 
-    const previousStatus = task.status;
-    const previousProgress = task.progress;
+    const _previousStatus = task.status;
+    const _previousProgress = task.progress;
 
     task.status = status;
     if (progress !== undefined) {
@@ -775,15 +584,6 @@ export class Agent8Client {
     }
 
     this.tasks.set(taskId, task);
-
-    console.log(`[Agent8] Task ${taskId} status updated:`, {
-      previousStatus: previousStatus,
-      newStatus: status,
-      previousProgress: previousProgress,
-      newProgress: progress,
-      error: error ? error.substring(0, 100) : null,
-      hasResult: !!result,
-    });
   }
 
   private generateTaskId(): string {
@@ -792,20 +592,15 @@ export class Agent8Client {
 
   public cleanupOldTasks(): void {
     const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
-    const initialCount = this.tasks.size;
-    let cleanedCount = 0;
-
-    console.log(`[Agent8] Old task cleanup started (current tasks: ${initialCount})`);
+    const _initialCount = this.tasks.size;
+    let _cleanedCount = 0;
 
     for (const [taskId, task] of this.tasks.entries()) {
       if (task.completedAt && task.completedAt < oneHourAgo) {
         this.tasks.delete(taskId);
-        cleanedCount++;
-        console.log(`[Agent8] Old task cleaned up: ${taskId} (completed at: ${task.completedAt})`);
+        _cleanedCount++;
       }
     }
-
-    console.log(`[Agent8] Task cleanup completed: ${cleanedCount} cleaned up (remaining tasks: ${this.tasks.size})`);
   }
 
   public hasActiveTasks(): boolean {
@@ -827,7 +622,12 @@ export class Agent8Client {
     return count;
   }
 
-  public getActiveTasksInfo(): Array<{ id: string, status: string, progress?: number, createdAt: Date }> {
+  public getActiveTasksInfo(): Array<{
+    id: string;
+    status: string;
+    progress?: number;
+    createdAt: Date;
+  }> {
     const activeTasks = [];
     for (const task of this.tasks.values()) {
       if (task.status === "pending" || task.status === "running") {
@@ -835,7 +635,7 @@ export class Agent8Client {
           id: task.id,
           status: task.status,
           progress: task.progress,
-          createdAt: task.createdAt
+          createdAt: task.createdAt,
         });
       }
     }
@@ -852,23 +652,19 @@ export class Agent8Client {
       return;
     }
 
-    if (task.status === 'completed' || task.status === 'failed') {
-      console.log(`[Agent8] Task ${taskId} already in final state: ${task.status}`);
+    if (task.status === "completed" || task.status === "failed") {
       return;
     }
-
-    console.log(`[Agent8] Force completing task ${taskId}: ${reason}`);
 
     const completionResult = {
       forcedCompletion: true,
       reason: reason,
       originalStatus: task.status,
       originalProgress: task.progress,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     };
 
     this.updateTaskStatus(taskId, "completed", 100, undefined, completionResult);
-    console.log(`[Agent8] Task ${taskId} force completed due to: ${reason}`);
   }
 
   /**
@@ -876,25 +672,15 @@ export class Agent8Client {
    */
   private async performAutoCommitPush(taskId: string, gitlabInfo: GitLabInfo): Promise<void> {
     try {
-      console.log(`[Agent8] Task ${taskId} - Auto-commit started for issue #${gitlabInfo.issueIid}`);
-
-
-
       const commitMessage = this.generateCommitMessage(gitlabInfo);
-      console.log(`[Agent8] Task ${taskId} - Commit message prepared (length: ${commitMessage.length})`);
-      console.log(`[Agent8] Task ${taskId} - Commit title: ${gitlabInfo.issueTitle}`);
 
       const commitPushResult = await this.gitlabGitService.commitAndPush(commitMessage);
 
       if (commitPushResult.success) {
-        console.log(`[Agent8] Task ${taskId} - Auto-commit/push completed successfully`);
-
         if (commitPushResult.commitResult.commitHash) {
-          console.log(`[Agent8] Task ${taskId} - Commit hash: ${commitPushResult.commitResult.commitHash}`);
         }
 
         if (commitPushResult.pushResult.pushedBranch) {
-          console.log(`[Agent8] Task ${taskId} - Pushed to branch: ${commitPushResult.pushResult.pushedBranch}`);
         }
 
         // Handle task success: add success comment and update issue status
@@ -904,10 +690,17 @@ export class Agent8Client {
         if (commitPushResult.commitResult.success && !commitPushResult.pushResult.success) {
           // Commit succeeded but push failed
           const pushError = new Error(`Push failed: ${commitPushResult.pushResult.error}`);
-          await this.handleCommitPushFailure(taskId, gitlabInfo, pushError, commitPushResult.commitResult);
+          await this.handleCommitPushFailure(
+            taskId,
+            gitlabInfo,
+            pushError,
+            commitPushResult.commitResult,
+          );
         } else {
           // Commit failed
-          const commitError = new Error(`Commit failed: ${commitPushResult.commitResult.error || commitPushResult.error}`);
+          const commitError = new Error(
+            `Commit failed: ${commitPushResult.commitResult.error || commitPushResult.error}`,
+          );
           await this.handleCommitPushFailure(taskId, gitlabInfo, commitError);
         }
         return; // Don't throw, we've handled the error
@@ -921,28 +714,24 @@ export class Agent8Client {
   /**
    * Handle action execution failures by logging and preparing for REJECT state
    */
-  private async handleActionFailure(taskId: string, gitlabInfo: GitLabInfo, actionResults: ActionResult[]): Promise<void> {
+  private async handleActionFailure(
+    taskId: string,
+    gitlabInfo: GitLabInfo,
+    actionResults: ActionResult[],
+  ): Promise<void> {
     try {
-      const failedActions = actionResults.filter(r => !r.success);
-      const successfulActions = actionResults.filter(r => r.success);
+      const failedActions = actionResults.filter((r) => !r.success);
+      const successfulActions = actionResults.filter((r) => r.success);
 
-      console.log(`[Agent8] Task ${taskId} - Action execution failed:`, {
-        totalActions: actionResults.length,
-        successful: successfulActions.length,
-        failed: failedActions.length
-      });
-
-      const errorComment = this.generateErrorComment('action_failure', {
+      const errorComment = this.generateErrorComment("action_failure", {
         timestamp: new Date().toISOString(),
-        failedActions: failedActions.map(r => ({
+        failedActions: failedActions.map((r) => ({
           error: r.error,
         })),
         successfulActions: successfulActions.length,
         failedActionsCount: failedActions.length,
-        containerId: gitlabInfo.containerId
+        containerId: gitlabInfo.containerId,
       });
-
-      console.log(`[Agent8] Task ${taskId} - Action failure comment prepared:`, errorComment.substring(0, 100) + '...');
 
       // Add error comment to GitLab issue
       await this.addIssueErrorComment(gitlabInfo, errorComment);
@@ -952,9 +741,7 @@ export class Agent8Client {
       if (issue) {
         const errorMessage = `Agent8 actions failed: ${failedActions.length}/${actionResults.length} actions failed`;
         await this.lifecycleWorkflow.onTaskExecutionFailure(issue, new Error(errorMessage));
-        console.log(`[Agent8] Task ${taskId} - Issue status updated to REJECT due to action failures`);
       }
-
     } catch (error) {
       console.error(`[Agent8] Task ${taskId} - Failed to handle action failure:`, error);
     }
@@ -963,21 +750,24 @@ export class Agent8Client {
   /**
    * Handle commit/push failures by logging and preparing for REJECT state
    */
-  private async handleCommitPushFailure(taskId: string, gitlabInfo: GitLabInfo, error: Error, commitResult?: GitCommitResult): Promise<void> {
+  private async handleCommitPushFailure(
+    taskId: string,
+    gitlabInfo: GitLabInfo,
+    error: Error,
+    commitResult?: GitCommitResult,
+  ): Promise<void> {
     try {
       console.error(`[Agent8] Task ${taskId} - Commit/Push failed:`, error.message);
 
       // Determine error type based on whether commit succeeded
-      const errorType = commitResult?.success ? 'push_failure' : 'commit_failure';
+      const errorType = commitResult?.success ? "push_failure" : "commit_failure";
 
       const errorComment = this.generateErrorComment(errorType, {
         timestamp: new Date().toISOString(),
         errorMessage: error.message,
         commitHash: commitResult?.commitHash,
-        containerId: gitlabInfo.containerId
+        containerId: gitlabInfo.containerId,
       });
-
-      console.log(`[Agent8] Task ${taskId} - ${errorType === 'push_failure' ? 'Push' : 'Commit'} failure comment prepared:`, errorComment.substring(0, 100) + '...');
 
       // Add error comment to GitLab issue
       await this.addIssueErrorComment(gitlabInfo, errorComment);
@@ -986,11 +776,12 @@ export class Agent8Client {
       const issue = await this.getGitLabIssue(gitlabInfo.projectId, gitlabInfo.issueIid);
       if (issue) {
         await this.lifecycleWorkflow.onTaskExecutionFailure(issue, error);
-        console.log(`[Agent8] Task ${taskId} - Issue status updated to REJECT due to ${errorType === 'push_failure' ? 'push' : 'commit'} failure`);
       }
-
     } catch (handlingError) {
-      console.error(`[Agent8] Task ${taskId} - Failed to handle commit/push failure:`, handlingError);
+      console.error(
+        `[Agent8] Task ${taskId} - Failed to handle commit/push failure:`,
+        handlingError,
+      );
     }
   }
 
@@ -1001,7 +792,7 @@ export class Agent8Client {
     const title = gitlabInfo.issueTitle;
     const description = gitlabInfo.issueDescription;
 
-    if (!description || description.trim() === '') {
+    if (!description || description.trim() === "") {
       return title;
     }
 
@@ -1011,34 +802,40 @@ export class Agent8Client {
   /**
    * Generate error comment templates for different failure types
    */
-  private generateErrorComment(errorType: 'action_failure' | 'commit_failure' | 'push_failure', details: any): string {
+  private generateErrorComment(
+    errorType: "action_failure" | "commit_failure" | "push_failure",
+    details: any,
+  ): string {
+    const timestamp = new Date().toISOString();
     const errorDetails: ErrorDetails = {
-      timestamp: details.timestamp || new Date().toISOString(),
-      containerId: details.containerId || 'unknown',
+      timestamp,
       errorMessage: details.errorMessage,
+      containerId: details.containerId,
       commitHash: details.commitHash,
       failedActions: details.failedActions,
       successfulActions: details.successfulActions,
-      failedActionsCount: details.failedActionsCount
+      failedActionsCount: details.failedActionsCount,
     };
 
     switch (errorType) {
-      case 'action_failure':
-        return GitLabCommentFormatter.createActionFailureComment(errorDetails);
-      case 'commit_failure':
-        return GitLabCommentFormatter.createCommitFailureComment(errorDetails);
-      case 'push_failure':
-        return GitLabCommentFormatter.createPushFailureComment(errorDetails);
+      case "action_failure":
+        return createActionFailureComment(errorDetails);
+      case "commit_failure":
+        return createCommitFailureComment(errorDetails);
+      case "push_failure":
+        return createPushFailureComment(errorDetails);
       default:
-        return GitLabCommentFormatter.createComment(
-          'Unknown Error',
-          '❌',
-          [{
-            title: 'Technical Details',
-            emoji: '📋',
-            content: [`**Container ID**: \`${errorDetails.containerId}\``]
-          }],
-          '*Agent8 automatic error report*'
+        return createComment(
+          "Unknown Error",
+          "❌",
+          [
+            {
+              title: "Technical Details",
+              emoji: "📋",
+              content: [`**Container ID**: \`${errorDetails.containerId}\``],
+            },
+          ],
+          "*Agent8 automatic error report*",
         );
     }
   }
@@ -1049,11 +846,9 @@ export class Agent8Client {
   private async handleTaskSuccess(
     taskId: string,
     gitlabInfo: GitLabInfo,
-    commitResult: GitCommitPushResult
+    commitResult: GitCommitPushResult,
   ): Promise<void> {
     try {
-      console.log(`[Agent8] Task ${taskId} - Task completed successfully, updating issue status`);
-
       // Generate success comment
       const successComment = this.generateSuccessComment(gitlabInfo, commitResult);
 
@@ -1063,15 +858,12 @@ export class Agent8Client {
         await this.lifecycleWorkflow.onTaskCompletion(issue, {
           containerId: gitlabInfo.containerId,
           commitHash: commitResult.commitResult.commitHash,
-          pushedBranch: commitResult.pushResult.pushedBranch
+          pushedBranch: commitResult.pushResult.pushedBranch,
         });
       }
 
       // Add success comment to GitLab issue
       await this.addIssueSuccessComment(gitlabInfo, successComment);
-
-      console.log(`[Agent8] Task ${taskId} - Issue status updated to CONFIRM NEEDED`);
-
     } catch (error) {
       console.error(`[Agent8] Task ${taskId} - Failed to handle task success:`, error);
       // Do not convert to error state since the actual work was successful
@@ -1083,16 +875,16 @@ export class Agent8Client {
    */
   private generateSuccessComment(
     gitlabInfo: GitLabInfo,
-    commitResult: GitCommitPushResult
+    commitResult: GitCommitPushResult,
   ): string {
     const successDetails: SuccessDetails = {
       timestamp: new Date().toISOString(),
       containerId: gitlabInfo.containerId,
       commitHash: commitResult.commitResult.commitHash,
-      pushedBranch: commitResult.pushResult.pushedBranch
+      pushedBranch: commitResult.pushResult.pushedBranch,
     };
 
-    return GitLabCommentFormatter.createSuccessComment(successDetails);
+    return createSuccessComment(successDetails);
   }
 
   /**
@@ -1101,9 +893,11 @@ export class Agent8Client {
   private async addIssueSuccessComment(gitlabInfo: GitLabInfo, comment: string): Promise<void> {
     try {
       await this.gitlabClient.addIssueComment(gitlabInfo.projectId, gitlabInfo.issueIid, comment);
-      console.log(`[Agent8] Success comment added to issue #${gitlabInfo.issueIid}`);
     } catch (error) {
-      console.error(`[Agent8] Failed to add success comment to issue #${gitlabInfo.issueIid}:`, error);
+      console.error(
+        `[Agent8] Failed to add success comment to issue #${gitlabInfo.issueIid}:`,
+        error,
+      );
     }
   }
 
@@ -1113,9 +907,11 @@ export class Agent8Client {
   private async addIssueErrorComment(gitlabInfo: GitLabInfo, comment: string): Promise<void> {
     try {
       await this.gitlabClient.addIssueComment(gitlabInfo.projectId, gitlabInfo.issueIid, comment);
-      console.log(`[Agent8] Error comment added to issue #${gitlabInfo.issueIid}`);
     } catch (error) {
-      console.error(`[Agent8] Failed to add error comment to issue #${gitlabInfo.issueIid}:`, error);
+      console.error(
+        `[Agent8] Failed to add error comment to issue #${gitlabInfo.issueIid}:`,
+        error,
+      );
     }
   }
 
@@ -1135,21 +931,17 @@ export class Agent8Client {
    * Handle issue completion event - terminate related tasks
    */
   private async handleIssueCompletionEvent(event: IssueCompletionEvent): Promise<void> {
-    console.log(`[Agent8] Issue #${event.issue.iid} completed, stopping monitoring and cleaning up tasks`);
-
     this.stopIssueMonitoring();
 
     const activeTasks = this.getActiveTasksInfo();
-    let terminatedCount = 0;
+    let _terminatedCount = 0;
 
     for (const task of activeTasks) {
-      if (task.status === 'pending' || task.status === 'running') {
+      if (task.status === "pending" || task.status === "running") {
         this.forceCompleteTask(task.id, `Issue #${event.issue.iid} marked as DONE`);
-        terminatedCount++;
+        _terminatedCount++;
       }
     }
-
-    console.log(`[Agent8] Terminated ${terminatedCount} tasks for completed issue #${event.issue.iid}`);
   }
 
   private async startIssueMonitoring(gitlabInfo: GitLabInfo): Promise<void> {
@@ -1157,30 +949,32 @@ export class Agent8Client {
 
     this.currentGitLabInfo = gitlabInfo;
     this.previousIssueState = await this.getCurrentIssueState(gitlabInfo);
-    console.log(`[Agent8] Initial issue state captured for #${gitlabInfo.issueIid}`);
 
     this.issuePollingInterval = setInterval(async () => {
       await this.checkIssueChanges();
     }, this.POLLING_INTERVAL);
-
-    console.log(`[Agent8] Issue monitoring started for #${gitlabInfo.issueIid} (${this.POLLING_INTERVAL / 1000}s interval)`);
   }
 
   private async getCurrentIssueState(gitlabInfo: GitLabInfo): Promise<IssueState> {
     const issue = await this.gitlabClient.getIssue(gitlabInfo.projectId, gitlabInfo.issueIid);
-    const comments = await this.gitlabClient.getIssueComments(gitlabInfo.projectId, gitlabInfo.issueIid);
+    const comments = await this.gitlabClient.getIssueComments(
+      gitlabInfo.projectId,
+      gitlabInfo.issueIid,
+    );
 
     return {
       labels: issue.labels || [],
       lastCommentAt: comments.length > 0 ? comments[comments.length - 1].created_at : null,
       commentCount: comments.length,
       lastComment: comments.length > 0 ? comments[comments.length - 1] : null,
-      updatedAt: issue.updated_at
+      updatedAt: issue.updated_at,
     };
   }
 
   private async checkIssueChanges(): Promise<void> {
-    if (!this.currentGitLabInfo || !this.previousIssueState) return;
+    if (!(this.currentGitLabInfo && this.previousIssueState)) {
+      return;
+    }
 
     try {
       const currentState = await this.getCurrentIssueState(this.currentGitLabInfo);
@@ -1194,9 +988,8 @@ export class Agent8Client {
       }
 
       this.previousIssueState = currentState;
-
     } catch (error) {
-      console.error(`[Agent8] Error checking issue changes:`, error);
+      console.error("[Agent8] Error checking issue changes:", error);
     }
   }
 
@@ -1205,16 +998,23 @@ export class Agent8Client {
   }
 
   private hasCommentChanged(previous: IssueState, current: IssueState): boolean {
-    return previous.commentCount !== current.commentCount ||
-      previous.lastCommentAt !== current.lastCommentAt;
+    return (
+      previous.commentCount !== current.commentCount ||
+      previous.lastCommentAt !== current.lastCommentAt
+    );
   }
 
-  private async handleLabelChange(previousState: IssueState, currentState: IssueState): Promise<void> {
-    console.log(`[Agent8] Label change detected: ${previousState.labels} → ${currentState.labels}`);
+  private async handleLabelChange(
+    previousState: IssueState,
+    currentState: IssueState,
+  ): Promise<void> {
+    if (!this.currentGitLabInfo) {
+      return;
+    }
 
     const issue = await this.gitlabClient.getIssue(
-      this.currentGitLabInfo!.projectId,
-      this.currentGitLabInfo!.issueIid
+      this.currentGitLabInfo.projectId,
+      this.currentGitLabInfo.issueIid,
     );
 
     const labelChangeEvent: LabelChangeEvent = {
@@ -1222,65 +1022,60 @@ export class Agent8Client {
       previousLabels: previousState.labels,
       currentLabels: currentState.labels,
       changedAt: new Date(),
-      changeType: 'modified'
+      changeType: "modified",
     };
 
     await this.lifecycleWorkflow.onLabelChange(labelChangeEvent);
   }
 
-  private async handleCommentChange(previousState: IssueState, currentState: IssueState): Promise<void> {
-    if (!currentState.lastComment) return;
-
-    console.log(`[Agent8] New comment detected from ${currentState.lastComment.author.username}`);
-    console.log(`[Agent8] Comment preview: "${currentState.lastComment.body.substring(0, 100)}${currentState.lastComment.body.length > 100 ? '...' : ''}"`);
-
-    if (currentState.lastComment.system) {
-      console.log(`[Agent8] System comment detected, ignoring`);
+  private async handleCommentChange(
+    _previousState: IssueState,
+    currentState: IssueState,
+  ): Promise<void> {
+    if (!currentState.lastComment) {
       return;
     }
 
-    console.log(`[Agent8] User comment logged successfully`);
+    if (currentState.lastComment.system) {
+      return;
+    }
   }
 
   private stopIssueMonitoring(): void {
     if (this.issuePollingInterval) {
       clearInterval(this.issuePollingInterval);
       this.issuePollingInterval = null;
-      console.log(`[Agent8] Issue monitoring stopped`);
     }
   }
 
   private async initRawStreamingFile(taskId: string): Promise<fs.FileHandle> {
     try {
-      const responseDir = path.join('/', '.agent8', 'llm-responses');
+      const responseDir = path.join("/", ".agent8", "llm-responses");
       await fs.mkdir(responseDir, { recursive: true });
 
       const rawFilePath = path.join(responseDir, `${taskId}.raw`);
-      const fileHandle = await fs.open(rawFilePath, 'w');
-
-      console.log(`[Agent8] Raw streaming file initialized: ${rawFilePath}`);
+      const fileHandle = await fs.open(rawFilePath, "w");
       return fileHandle;
     } catch (error) {
-      console.error(`[Agent8] Failed to initialize raw streaming file:`, error);
+      console.error("[Agent8] Failed to initialize raw streaming file:", error);
       throw error;
     }
   }
 
   private async appendToRawFile(fileHandle: fs.FileHandle, chunk: string): Promise<void> {
     try {
-      await fileHandle.write(chunk, null, 'utf8');
+      await fileHandle.write(chunk, null, "utf8");
       await fileHandle.sync();
     } catch (error) {
-      console.error(`[Agent8] Failed to append to raw file:`, error);
+      console.error("[Agent8] Failed to append to raw file:", error);
     }
   }
 
   private async finalizeRawFile(fileHandle: fs.FileHandle): Promise<void> {
     try {
       await fileHandle.sync();
-      console.log(`[Agent8] Raw streaming file finalized`);
     } catch (error) {
-      console.error(`[Agent8] Failed to finalize raw file:`, error);
+      console.error("[Agent8] Failed to finalize raw file:", error);
     }
   }
 
@@ -1288,46 +1083,37 @@ export class Agent8Client {
     try {
       await fileHandle.close();
     } catch (error) {
-      console.error(`[Agent8] Failed to close raw file:`, error);
+      console.error("[Agent8] Failed to close raw file:", error);
     }
   }
 
   private async saveMetadata(taskId: string, metadata: any): Promise<void> {
     try {
-      const responseDir = path.join('/', '.agent8', 'llm-responses');
+      const responseDir = path.join("/", ".agent8", "llm-responses");
       await fs.mkdir(responseDir, { recursive: true });
 
       const jsonFile = path.join(responseDir, `${taskId}.json`);
-      await fs.writeFile(jsonFile, JSON.stringify(metadata, null, 2), 'utf8');
-
-      console.log(`[Agent8] Metadata saved: ${jsonFile}`);
+      await fs.writeFile(jsonFile, JSON.stringify(metadata, null, 2), "utf8");
     } catch (error) {
-      console.error(`[Agent8] Failed to save metadata:`, error);
+      console.error("[Agent8] Failed to save metadata:", error);
     }
   }
 
   private async buildFileMapFromWorkdir(): Promise<FileMap> {
-    console.log(`[Agent8] Building FileMap from working directory`);
     const result = await this.fileMapBuilder.buildFileMap();
-
-    console.log(`[Agent8] FileMap built successfully:`, {
-      filesCount: Object.keys(result.fileMap).length,
-      totalSize: result.stats.totalSize,
-      duration: result.stats.duration,
-      processedFiles: result.stats.processedFiles,
-      skippedFiles: result.stats.skippedFiles,
-      errors: result.stats.errors.length
-    });
 
     // If no files were processed, this indicates a critical problem
     if (result.stats.processedFiles === 0) {
-      console.error(`[Agent8] FileMap build failed: No files were processed`);
-      throw new Error('FileMap build failed: No source files found or processed');
+      console.error("[Agent8] FileMap build failed: No files were processed");
+      throw new Error("FileMap build failed: No source files found or processed");
     }
 
     // Log warnings but continue (minor issues like some binary files, etc.)
     if (result.stats.errors.length > 0) {
-      console.warn(`[Agent8] FileMap build completed with ${result.stats.errors.length} warnings:`, result.stats.errors.slice(0, 3));
+      console.warn(
+        `[Agent8] FileMap build completed with ${result.stats.errors.length} warnings:`,
+        result.stats.errors.slice(0, 3),
+      );
     }
 
     return result.fileMap;
@@ -1335,7 +1121,6 @@ export class Agent8Client {
 
   public cleanup(): void {
     this.stopIssueMonitoring();
-    console.log(`[Agent8] Client cleanup completed`);
   }
 
   // ========================================
@@ -1348,46 +1133,42 @@ export class Agent8Client {
    */
   public async getCurrentTaskId(): Promise<string | null> {
     try {
-      const responseDir = path.join('/', '.agent8', 'llm-responses');
+      const responseDir = path.join("/", ".agent8", "llm-responses");
 
       // Check if directory exists
       try {
         await fs.access(responseDir);
       } catch {
-        console.log(`[Agent8] No response directory found: ${responseDir}`);
         return null;
       }
 
       const files = await fs.readdir(responseDir);
-      const jsonFiles = files.filter(file => file.endsWith('.json'));
+      const jsonFiles = files.filter((file) => file.endsWith(".json"));
 
       if (jsonFiles.length === 0) {
-        console.log(`[Agent8] No task metadata files found`);
         return null;
       }
 
       // Find the most recent task (by timestamp in filename)
       const taskFiles = jsonFiles
-        .map(file => file.replace('.json', ''))
-        .filter(taskId => taskId.startsWith('agent8-task_'))
+        .map((file) => file.replace(".json", ""))
+        .filter((taskId) => taskId.startsWith("agent8-task_"))
         .sort((a, b) => {
           // Extract timestamp from taskId format: agent8-task_1735123456_abc123
-          const timestampA = parseInt(a.split('_')[1]) || 0;
-          const timestampB = parseInt(b.split('_')[1]) || 0;
+          const timestampA = Number.parseInt(a.split("_")[1]) || 0;
+          const timestampB = Number.parseInt(b.split("_")[1]) || 0;
           return timestampB - timestampA; // Most recent first
         });
 
       const currentTaskId = taskFiles[0] || null;
 
       if (currentTaskId) {
-        console.log(`[Agent8] Current task ID found: ${currentTaskId}`);
       } else {
-        console.log(`[Agent8] No valid task IDs found`);
       }
 
       return currentTaskId;
     } catch (error) {
-      console.error(`[Agent8] Failed to get current task ID:`, error);
+      console.error("[Agent8] Failed to get current task ID:", error);
       return null;
     }
   }
@@ -1400,13 +1181,12 @@ export class Agent8Client {
     try {
       const taskId = await this.getCurrentTaskId();
       if (!taskId) {
-        console.log(`[Agent8] No current task found for raw content loading`);
         return null;
       }
 
       return await this.loadRawContent(taskId);
     } catch (error) {
-      console.error(`[Agent8] Failed to load current raw content:`, error);
+      console.error("[Agent8] Failed to load current raw content:", error);
       return null;
     }
   }
@@ -1419,13 +1199,12 @@ export class Agent8Client {
     try {
       const taskId = await this.getCurrentTaskId();
       if (!taskId) {
-        console.log(`[Agent8] No current task found for metadata loading`);
         return null;
       }
 
       return await this.loadMetadata(taskId);
     } catch (error) {
-      console.error(`[Agent8] Failed to load current metadata:`, error);
+      console.error("[Agent8] Failed to load current metadata:", error);
       return null;
     }
   }
@@ -1435,11 +1214,10 @@ export class Agent8Client {
    */
   public async loadRawContent(taskId: string): Promise<string | null> {
     try {
-      const responseDir = path.join('/', '.agent8', 'llm-responses');
+      const responseDir = path.join("/", ".agent8", "llm-responses");
       const rawFilePath = path.join(responseDir, `${taskId}.raw`);
 
-      const content = await fs.readFile(rawFilePath, 'utf8');
-      console.log(`[Agent8] Raw content loaded for task ${taskId} (${content.length} chars)`);
+      const content = await fs.readFile(rawFilePath, "utf8");
       return content;
     } catch (error) {
       console.error(`[Agent8] Failed to load raw content for task ${taskId}:`, error);
@@ -1452,12 +1230,11 @@ export class Agent8Client {
    */
   public async loadMetadata(taskId: string): Promise<TaskResponseData | null> {
     try {
-      const responseDir = path.join('/', '.agent8', 'llm-responses');
+      const responseDir = path.join("/", ".agent8", "llm-responses");
       const jsonFilePath = path.join(responseDir, `${taskId}.json`);
 
-      const content = await fs.readFile(jsonFilePath, 'utf8');
+      const content = await fs.readFile(jsonFilePath, "utf8");
       const metadata = JSON.parse(content) as TaskResponseData;
-      console.log(`[Agent8] Metadata loaded for task ${taskId}`);
       return metadata;
     } catch (error) {
       console.error(`[Agent8] Failed to load metadata for task ${taskId}:`, error);

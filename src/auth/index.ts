@@ -1,4 +1,4 @@
-import { createHash } from 'crypto';
+const BEARER_PREFIX_REGEX = /^Bearer /;
 
 interface AuthConfig {
   authServerUrl: string;
@@ -12,25 +12,28 @@ export class AuthManager {
     this.authServerUrl = config.authServerUrl;
   }
 
-  async verifyToken(token: string): Promise<{ userUid: string, [key: string]: any }> {
-    if (!token)
-      throw new Error('Token is required');
+  async verifyToken(token: string): Promise<{ userUid: string; [key: string]: any }> {
+    if (!token) {
+      throw new Error("Token is required");
+    }
 
     try {
       const response = await fetch(`${this.authServerUrl}/v1/auth/verify`, {
-        method: 'GET',
+        method: "GET",
         headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        }
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
       });
 
       if (!response.ok) {
         throw new Error(`Token verification failed: ${response.statusText}`);
       }
 
-      const userInfo = await response.json() as { userUid?: string, [key: string]: any };
-      if (!userInfo.userUid) throw new Error(`userUid doesn't exist in the response`);
+      const userInfo = (await response.json()) as { userUid?: string; [key: string]: any };
+      if (!userInfo.userUid) {
+        throw new Error(`userUid doesn't exist in the response`);
+      }
       return { userUid: userInfo.userUid, ...userInfo };
     } catch (error) {
       throw new Error(`Error verifying token: ${error}`);
@@ -38,10 +41,10 @@ export class AuthManager {
   }
 
   extractTokenFromHeader(authHeader: string | null): string | null {
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    if (!authHeader?.startsWith("Bearer ")) {
       return null;
     }
-    return authHeader.replace(/^Bearer /, '');
+    return authHeader.replace(BEARER_PREFIX_REGEX, "");
   }
 }
 
@@ -58,15 +61,13 @@ export {
   validateTimestamp,
   createContainerAuthRequest,
   type ContainerAuthRequest,
-} from './ecdsaUtil.js';
+} from "./ecdsaUtil.js";
 
 export {
   ContainerAuthClient,
   type ContainerJWTPayload,
   type AuthenticationResult,
   type JWTValidationResult,
-} from './jwtUtil.js';
+} from "./jwtUtil.js";
 
-export {
-  getContainerAuthTokenForUser,
-} from '../container/containerAuthClient.js';
+export { getContainerAuthTokenForUser } from "../container/containerAuthClient.js";

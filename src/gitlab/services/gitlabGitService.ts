@@ -1,21 +1,21 @@
-import type { GitLabClient } from './gitlabClient.js';
+import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import simpleGit, { type SimpleGit } from "simple-git";
+import type { GitLabInfo } from "../types/api.js";
 import type {
-  GitCheckoutResult,
-  GitRepositoryInfo,
   GitBranchInfo,
-  MergeRequestCreationResult,
+  GitCheckoutResult,
+  GitCommitPushResult,
   GitCommitResult,
   GitPushResult,
-  GitCommitPushResult
-} from '../types/git.js';
-import type { GitLabIssue } from '../types/index.js';
-import type { GitLabInfo } from '../types/api.js';
-import simpleGit, { type SimpleGit } from 'simple-git';
-import { mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+  GitRepositoryInfo,
+  MergeRequestCreationResult,
+} from "../types/git.js";
+import type { GitLabIssue } from "../types/index.js";
+import type { GitLabClient } from "./gitlabClient.js";
 
 // Regular expression for masking Git clone URLs in logs
-const GIT_URL_MASK_REGEX = /\/\/.*@/;
+const _GIT_URL_MASK_REGEX = /\/\/.*@/;
 
 export class GitLabGitService {
   private gitlabClient: GitLabClient;
@@ -33,16 +33,13 @@ export class GitLabGitService {
 
   async checkoutRepositoryForIssue(
     projectId: number,
-    issueIid: number
+    issueIid: number,
   ): Promise<GitCheckoutResult> {
     try {
-      console.log(`[GitLab-Git] Starting checkout for project ${projectId}, issue #${issueIid}`);
-      console.log(`[GitLab-Git] Target branch: ${this.branch}`);
-
       // 1. Fetch project and issue information in parallel via GitLab API
       const [project, issue] = await Promise.all([
         this.gitlabClient.getProject(projectId),
-        this.gitlabClient.getIssue(projectId, issueIid)
+        this.gitlabClient.getIssue(projectId, issueIid),
       ]);
 
       const repoInfo = this.extractRepositoryInfo(project);
@@ -56,7 +53,6 @@ export class GitLabGitService {
 
       // 4. Determine which branch to use as base
       const baseBranch = await this.determineBaseBranch(repoInfo.defaultBranch);
-      console.log(`[GitLab-Git] Using base branch: ${baseBranch}`);
 
       // 5. Create and checkout issue branch from determined base branch
       const timestamp = Date.now();
@@ -72,32 +68,33 @@ export class GitLabGitService {
         sourceBranch: branchName,
         targetBranch: baseBranch,
         issue,
-        issueIid
+        issueIid,
       });
 
-      console.log(`[GitLab-Git] Git checkout completed successfully`);
-      console.log(`[GitLab-Git] Repository: ${repoInfo.pathWithNamespace}, Branch: ${branchName}`);
-
-      if (mrResult.success && mrResult.mergeRequest) {
-        console.log(`[GitLab-Git] Draft MR created: !${mrResult.mergeRequest.iid} (${mrResult.mergeRequest.web_url})`);
-      } else if (mrResult.error) {
+      if (!(mrResult.success && mrResult.mergeRequest)) {
         console.warn(`[GitLab-Git] MR creation failed: ${mrResult.error}`);
+        return {
+          success: false,
+          clonedRepository: "",
+          createdBranch: "",
+          error: mrResult.error,
+        };
       }
 
       return {
         success: true,
         clonedRepository: repoInfo.pathWithNamespace,
         createdBranch: branchName,
-        createdMergeRequest: mrResult.mergeRequest
+        createdMergeRequest: mrResult.mergeRequest,
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error(`[GitLab-Git] Checkout failed: ${errorMessage}`);
       return {
         success: false,
-        clonedRepository: '',
-        createdBranch: '',
-        error: errorMessage
+        clonedRepository: "",
+        createdBranch: "",
+        error: errorMessage,
       };
     }
   }
@@ -107,40 +104,35 @@ export class GitLabGitService {
       httpUrl: project.http_url_to_repo as string,
       sshUrl: project.ssh_url_to_repo as string,
       defaultBranch: project.default_branch as string,
-      pathWithNamespace: project.path_with_namespace as string
+      pathWithNamespace: project.path_with_namespace as string,
     };
   }
 
   private async cloneRepository(cloneUrl: string): Promise<void> {
     const token = process.env.GITLAB_TOKEN;
     if (!token) {
-      throw new Error('GITLAB_TOKEN environment variable is required');
+      throw new Error("GITLAB_TOKEN environment variable is required");
     }
 
     // Create authenticated clone URL
-    const authenticatedUrl = cloneUrl.replace(
-      'https://',
-      `https://oauth2:${token}@`
-    );
-
-    console.log(`[GitLab-Git] Cloning repository from ${cloneUrl.replace(GIT_URL_MASK_REGEX, '//***@')}`);
-    await this.git.clone(authenticatedUrl, '.');
+    const authenticatedUrl = cloneUrl.replace("https://", `https://oauth2:${token}@`);
+    await this.git.clone(authenticatedUrl, ".");
   }
 
   private async createIssueBranch(branchName: string, baseBranch: string): Promise<GitBranchInfo> {
     try {
-      console.log(`[GitLab-Git] Creating and checking out branch: ${branchName} from ${baseBranch}`);
-
       // Create and checkout new branch from base branch
       await this.git.checkoutLocalBranch(branchName);
 
       return {
         name: branchName,
         baseBranch: baseBranch,
-        created: true
+        created: true,
       };
-        } catch (_error) {
-      console.warn(`[GitLab-Git] Failed to create branch ${branchName}, using existing branch or default`);
+    } catch (_error) {
+      console.warn(
+        `[GitLab-Git] Failed to create branch ${branchName}, using existing branch or default`,
+      );
 
       // If branch creation fails, try to checkout existing branch
       try {
@@ -148,7 +140,7 @@ export class GitLabGitService {
         return {
           name: branchName,
           baseBranch: baseBranch,
-          created: false
+          created: false,
         };
       } catch (_checkoutError) {
         // If checkout also fails, stay on default branch
@@ -156,7 +148,7 @@ export class GitLabGitService {
         return {
           name: baseBranch,
           baseBranch: baseBranch,
-          created: false
+          created: false,
         };
       }
     }
@@ -165,9 +157,8 @@ export class GitLabGitService {
   private async configureGitSettings(): Promise<void> {
     try {
       // Set basic git configuration for commits
-      await this.git.addConfig('user.name', 'Agent8 Container');
-      await this.git.addConfig('user.email', 'agent8@verse8.io');
-      console.log('[GitLab-Git] Git configuration set successfully');
+      await this.git.addConfig("user.name", "Agent8 Container");
+      await this.git.addConfig("user.email", "agent8@verse8.io");
     } catch (error) {
       console.warn(`[GitLab-Git] Failed to configure git settings: ${error}`);
     }
@@ -175,15 +166,13 @@ export class GitLabGitService {
 
   private async cleanWorkDirectory(): Promise<void> {
     try {
-      console.log(`[GitLab-Git] Cleaning work directory: ${this.workdir}`);
-
       // Ensure work directory exists
       await mkdir(this.workdir, { recursive: true });
 
       // Remove all files and directories except hidden files
       const files = await readdir(this.workdir);
       for (const file of files) {
-        if (!file.startsWith('.')) {
+        if (!file.startsWith(".")) {
           const filePath = join(this.workdir, file);
           try {
             const stats = await stat(filePath);
@@ -197,8 +186,6 @@ export class GitLabGitService {
           }
         }
       }
-
-      console.log('[GitLab-Git] Work directory cleaned successfully');
     } catch (error) {
       console.warn(`[GitLab-Git] Failed to clean work directory: ${error}`);
       throw error;
@@ -212,7 +199,7 @@ export class GitLabGitService {
       return result.current;
     } catch (error) {
       console.warn(`[GitLab-Git] Failed to get current branch: ${error}`);
-      return 'unknown';
+      return "unknown";
     }
   }
 
@@ -242,10 +229,12 @@ export class GitLabGitService {
     issueIid: number;
   }): Promise<MergeRequestCreationResult> {
     try {
-      console.log(`[GitLab-Git] Creating draft merge request for issue #${options.issueIid}`);
-
       const title = this.generateMergeRequestTitle(options.issue, options.issueIid);
-      const description = this.generateMergeRequestDescription(options.issue, options.issueIid, options.sourceBranch);
+      const description = this.generateMergeRequestDescription(
+        options.issue,
+        options.issueIid,
+        options.sourceBranch,
+      );
 
       const mergeRequest = await this.gitlabClient.createMergeRequest({
         projectId: options.projectId,
@@ -253,31 +242,35 @@ export class GitLabGitService {
         targetBranch: options.targetBranch,
         title,
         description,
-        issueIid: options.issueIid
+        issueIid: options.issueIid,
       });
 
       return {
         success: true,
-        mergeRequest
+        mergeRequest,
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       // MR creation failure is not critical - Git checkout has completed successfully
       return {
         success: false,
-        error: errorMessage
+        error: errorMessage,
       };
     }
   }
 
   private generateMergeRequestTitle(issue: GitLabIssue, issueIid: number): string {
     // Remove existing Draft/WIP prefixes and add new one
-    const cleanTitle = issue.title.replace(/^(Draft:|WIP:)\s*/i, '');
+    const cleanTitle = issue.title.replace(/^(Draft:|WIP:)\s*/i, "");
     return `Draft: [Issue #${issueIid}] ${cleanTitle}`;
   }
 
-  private generateMergeRequestDescription(issue: GitLabIssue, issueIid: number, branchName: string): string {
-    const issueDescription = issue.description || 'No description provided.';
+  private generateMergeRequestDescription(
+    issue: GitLabIssue,
+    issueIid: number,
+    branchName: string,
+  ): string {
+    const issueDescription = issue.description || "No description provided.";
 
     return `## 🔗 Related Issue
 
@@ -308,14 +301,13 @@ ${issueDescription}
    * Ensure .gitignore file exists with TypeScript/pnpm template if not present
    */
   private async ensureGitignore(): Promise<void> {
-    const gitignorePath = join(this.workdir, '.gitignore');
+    const gitignorePath = join(this.workdir, ".gitignore");
 
     try {
       await stat(gitignorePath);
-      console.log('[GitLab-Git] .gitignore file already exists, skipping template creation');
       return;
     } catch {
-      console.log('[GitLab-Git] Creating .gitignore template');
+      console.warn("[GitLab-Git] .gitignore file not found, creating template");
     }
 
     const gitignoreTemplate = `# Dependencies
@@ -368,7 +360,6 @@ temp/
 
     try {
       await writeFile(gitignorePath, gitignoreTemplate);
-      console.log('[GitLab-Git] .gitignore template created successfully');
     } catch (error) {
       console.warn(`[GitLab-Git] Failed to create .gitignore template: ${error}`);
     }
@@ -379,43 +370,32 @@ temp/
    */
   async commitChanges(commitMessage: string): Promise<GitCommitResult> {
     try {
-      console.log('[GitLab-Git] Starting commit process');
-
       await this.ensureGitignore();
       const status = await this.git.status();
 
       if (status.files.length === 0) {
-        console.log('[GitLab-Git] No changes to commit');
         return {
           success: true,
-          message: 'No changes to commit'
+          message: "No changes to commit",
         };
       }
 
-      console.log(`[GitLab-Git] Found ${status.files.length} changed files`);
-      console.log('[GitLab-Git] Changed files:', status.files.map(f => f.path));
-
-      await this.git.add('.');
-      console.log('[GitLab-Git] All changes staged');
+      await this.git.add(".");
 
       const commitResult = await this.git.commit(commitMessage);
       const commitHash = commitResult.commit;
 
-      console.log(`[GitLab-Git] Commit created: ${commitHash}`);
-      console.log(`[GitLab-Git] Commit message: ${commitMessage.split('\n')[0]}...`);
-
       return {
         success: true,
         commitHash: commitHash,
-        message: 'Commit successful'
+        message: "Commit successful",
       };
-
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error(`[GitLab-Git] Commit failed: ${errorMessage}`);
       return {
         success: false,
-        error: errorMessage
+        error: errorMessage,
       };
     }
   }
@@ -425,26 +405,20 @@ temp/
    */
   async pushToRemote(): Promise<GitPushResult> {
     try {
-      console.log('[GitLab-Git] Starting push process');
-
       const currentBranch = await this.getCurrentBranch();
-      console.log(`[GitLab-Git] Pushing branch: ${currentBranch}`);
 
-      await this.git.push('origin', currentBranch);
-
-      console.log(`[GitLab-Git] Push completed: ${currentBranch}`);
+      await this.git.push("origin", currentBranch);
 
       return {
         success: true,
-        pushedBranch: currentBranch
+        pushedBranch: currentBranch,
       };
-
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error(`[GitLab-Git] Push failed: ${errorMessage}`);
       return {
         success: false,
-        error: errorMessage
+        error: errorMessage,
       };
     }
   }
@@ -453,24 +427,22 @@ temp/
    * Execute commit and push operations sequentially
    */
   async commitAndPush(commitMessage: string): Promise<GitCommitPushResult> {
-    console.log('[GitLab-Git] Starting commit and push workflow');
-
     const commitResult = await this.commitChanges(commitMessage);
 
     if (!commitResult.success) {
       return {
         success: false,
         commitResult,
-        pushResult: { success: false, error: 'Commit failed, skipping push' },
-        error: 'Commit failed'
+        pushResult: { success: false, error: "Commit failed, skipping push" },
+        error: "Commit failed",
       };
     }
 
-    if (commitResult.message === 'No changes to commit') {
+    if (commitResult.message === "No changes to commit") {
       return {
         success: true,
         commitResult,
-        pushResult: { success: true, pushedBranch: 'none' }
+        pushResult: { success: true, pushedBranch: "none" },
       };
     }
 
@@ -482,7 +454,7 @@ temp/
       success: overallSuccess,
       commitResult,
       pushResult,
-      ...(overallSuccess ? {} : { error: 'Commit or push failed' })
+      ...(overallSuccess ? {} : { error: "Commit or push failed" }),
     };
   }
 
@@ -493,7 +465,7 @@ temp/
     const title = gitlabInfo.issueTitle;
     const description = gitlabInfo.issueDescription;
 
-    if (!description || description.trim() === '') {
+    if (!description || description.trim() === "") {
       return title;
     }
 
@@ -507,22 +479,21 @@ temp/
   private async determineBaseBranch(defaultBranch: string): Promise<string> {
     try {
       // Check if specified branch exists in remote
-      const branches = await this.git.branch(['-r']);
-      const remoteBranches = branches.all.map(branch => branch.replace('origin/', ''));
+      const branches = await this.git.branch(["-r"]);
+      const remoteBranches = branches.all.map((branch) => branch.replace("origin/", ""));
 
       if (remoteBranches.includes(this.branch)) {
-        console.log(`[GitLab-Git] Branch '${this.branch}' found, using as base`);
         // Checkout to specified branch
         await this.git.checkout(this.branch);
         return this.branch;
-      } else {
-        console.log(`[GitLab-Git] Branch '${this.branch}' not found, falling back to default: ${defaultBranch}`);
-        return defaultBranch;
       }
+      return defaultBranch;
     } catch (error) {
-      console.warn(`[GitLab-Git] Failed to determine base branch, using default: ${defaultBranch}`, error);
+      console.warn(
+        `[GitLab-Git] Failed to determine base branch, using default: ${defaultBranch}`,
+        error,
+      );
       return defaultBranch;
     }
   }
 }
-

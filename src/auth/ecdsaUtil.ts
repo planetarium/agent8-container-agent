@@ -1,4 +1,4 @@
-import { createSign, KeyObject, createPrivateKey } from 'node:crypto';
+import { type KeyObject, createPrivateKey, createSign } from "node:crypto";
 
 /**
  * ECDSA P-256 Container Authentication Utilities
@@ -25,7 +25,7 @@ export function loadPrivateKey(): KeyObject {
 
   const privateKeyPem = process.env.CONTAINER_PRIVATE_KEY_PEM;
   if (!privateKeyPem) {
-    throw new Error('CONTAINER_PRIVATE_KEY_PEM environment variable is required');
+    throw new Error("CONTAINER_PRIVATE_KEY_PEM environment variable is required");
   }
 
   try {
@@ -36,8 +36,6 @@ export function loadPrivateKey(): KeyObject {
   }
 }
 
-
-
 /**
  * Generate ECDSA P-256 signature for userEmail:timestamp format
  */
@@ -45,13 +43,11 @@ export function signMessage(userEmail: string, timestamp: number): string {
   const message = `${userEmail}:${timestamp}`;
   const privateKeyObj = loadPrivateKey();
 
-  const sign = createSign('sha256');
+  const sign = createSign("sha256");
   sign.update(message);
 
-  return sign.sign(privateKeyObj, 'base64');
+  return sign.sign(privateKeyObj, "base64");
 }
-
-
 
 /**
  * Validate timestamp within allowed time window
@@ -59,13 +55,18 @@ export function signMessage(userEmail: string, timestamp: number): string {
 export function validateTimestamp(timestamp: number): boolean {
   const now = Date.now();
   const timestampMs = timestamp * 1000;
-  const timeLimitSeconds = parseInt(process.env.CONTAINER_TIMESTAMP_LIMIT_SECONDS || '300', 10);
+  const timeLimitSeconds = Number.parseInt(
+    process.env.CONTAINER_TIMESTAMP_LIMIT_SECONDS || "300",
+    10,
+  );
   const timeLimitMs = timeLimitSeconds * 1000;
 
   const timeDiff = Math.abs(now - timestampMs);
 
   if (timeDiff > timeLimitMs) {
-    console.warn(`[ECDSA] Timestamp validation failed: time difference ${timeDiff}ms exceeds limit ${timeLimitMs}ms`);
+    console.warn(
+      `[ECDSA] Timestamp validation failed: time difference ${timeDiff}ms exceeds limit ${timeLimitMs}ms`,
+    );
     return false;
   }
 
@@ -79,7 +80,7 @@ export function createContainerAuthRequest(userEmail: string): ContainerAuthRequ
   const timestamp = Math.floor(Date.now() / 1000);
 
   if (!validateTimestamp(timestamp)) {
-    throw new Error('Generated timestamp is invalid');
+    throw new Error("Generated timestamp is invalid");
   }
 
   const signature = signMessage(userEmail, timestamp);
@@ -90,5 +91,3 @@ export function createContainerAuthRequest(userEmail: string): ContainerAuthRequ
     signature,
   };
 }
-
-

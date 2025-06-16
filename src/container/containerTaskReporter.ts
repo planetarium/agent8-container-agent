@@ -1,17 +1,16 @@
+import * as fs from "node:fs/promises";
 /**
  * Container Task Reporter
  *
  * This module handles autonomous task execution and reporting to GitLab.
  * Containers use this to process Agent8 tasks and report results directly to GitLab issues.
  */
-import { Agent8Client } from '../agent8';
-import type { ContainerServer } from '../server';
-import { ensureSafePath } from '../server';
-import * as fs from 'fs/promises';
-import { getContainerAuthTokenForUser } from './containerAuthClient.js';
+import { Agent8Client } from "../agent8/agent8Client.ts";
+import type { ContainerServer } from "../server.ts";
+import { getContainerAuthTokenForUser } from "./containerAuthClient.ts";
 
-import type { GitLabInfo } from '../gitlab/types/api.js';
-import type { TaskExecutionResult } from '../agent8/types/api.js';
+import type { TaskExecutionResult } from "../agent8/types/api.ts";
+import type { GitLabInfo } from "../gitlab/types/api.js";
 
 export type { GitLabInfo };
 
@@ -33,40 +32,28 @@ export class ContainerTaskReporter {
   constructor() {
     // Read GitLab credentials from environment variables
     this.gitlabToken = process.env.GITLAB_TOKEN;
-    this.gitlabBaseUrl = process.env.GITLAB_BASE_URL || 'https://gitlab.com';
+    this.gitlabBaseUrl = process.env.GITLAB_BASE_URL || "https://gitlab.com";
 
     if (!this.gitlabToken) {
-      console.warn('[Container-Reporter] GITLAB_TOKEN not found in environment variables');
+      console.warn("[Container-Reporter] GITLAB_TOKEN not found in environment variables");
     }
-
-    console.log(`[Container-Reporter] Initialized with GitLab base URL: ${this.gitlabBaseUrl}`);
   }
 
   /**
    * Main entry point: Execute task and report to GitLab
    */
   async executeTaskAndReport(taskPayload: TaskPayload): Promise<void> {
-    const { messages, gitlabInfo } = taskPayload;
+    const { gitlabInfo } = taskPayload;
     const startTime = Date.now();
-
-    console.log(`[Container-Reporter] Starting task execution for GitLab issue #${gitlabInfo.issueIid}`);
-    console.log(`[Container-Reporter] Task details:`, {
-      projectId: gitlabInfo.projectId,
-      issueIid: gitlabInfo.issueIid,
-      issueTitle: gitlabInfo.issueTitle,
-      messagesCount: messages.length
-    });
 
     try {
       // Execute Agent8 task
       const result = await this.executeAgent8Task(taskPayload);
 
       const executionTime = Date.now() - startTime;
-      console.log(`[Container-Reporter] Task completed successfully in ${executionTime}ms`);
 
       // Report success to GitLab
-      await this.reportToGitLab(gitlabInfo, result, 'completed', executionTime);
-
+      await this.reportToGitLab(gitlabInfo, result, "completed", executionTime);
     } catch (error) {
       const executionTime = Date.now() - startTime;
       console.error(`[Container-Reporter] Task execution failed after ${executionTime}ms:`, error);
@@ -77,11 +64,11 @@ export class ContainerTaskReporter {
         executedActions: 0,
         failedActions: 1,
         artifacts: [],
-        textChunks: '',
-        error: error instanceof Error ? error.message : 'Unknown error'
+        textChunks: "",
+        error: error instanceof Error ? error.message : "Unknown error",
       };
 
-      await this.reportToGitLab(gitlabInfo, errorResult, 'failed', executionTime);
+      await this.reportToGitLab(gitlabInfo, errorResult, "failed", executionTime);
     }
   }
 
@@ -89,18 +76,15 @@ export class ContainerTaskReporter {
    * Execute Agent8 task using real Agent8Client
    */
   private async executeAgent8Task(taskPayload: TaskPayload): Promise<TaskResult> {
-    console.log(`[Container-Reporter] Executing Agent8 task with payload:`, {
-      targetServerUrl: taskPayload.targetServerUrl,
-      messagesCount: taskPayload.messages.length,
-      promptId: taskPayload.promptId,
-      contextOptimization: taskPayload.contextOptimization,
-      filesCount: Object.keys(taskPayload.files || {}).length
-    });
-
-    const workdir = process.env.WORKDIR_NAME || '/home/project';
+    const workdir = process.env.WORKDIR_NAME || "/home/project";
 
     // Ensure working directory exists
-    if (!await fs.access(workdir).then(() => true).catch(() => false)) {
+    if (
+      !(await fs
+        .access(workdir)
+        .then(() => true)
+        .catch(() => false))
+    ) {
       await fs.mkdir(workdir, { recursive: true });
     }
 
@@ -110,17 +94,15 @@ export class ContainerTaskReporter {
 
     const agent8Client = new Agent8Client(containerServer, workdir);
 
-        try {
+    try {
       // Get container authentication token for the specific GitLab user
-      const authServerUrl = process.env.AUTH_SERVER_URL || 'https://v8-meme-api.verse8.io/v1';
+      const authServerUrl = process.env.AUTH_SERVER_URL || "https://v8-meme-api.verse8.io/v1";
       const userEmail = taskPayload.gitlabInfo.issueAuthor; // Use GitLab issue author email
       const containerAuthToken = await getContainerAuthTokenForUser(authServerUrl, userEmail);
 
-      console.log(`[Container-Reporter] Generated container auth token for user: ${userEmail}`);
-
       // Create task request in Agent8Client format
       const taskRequest = {
-        userId: 'container-task',
+        userId: "container-task",
         token: containerAuthToken,
         targetServerUrl: taskPayload.targetServerUrl,
         messages: taskPayload.messages,
@@ -131,33 +113,33 @@ export class ContainerTaskReporter {
 
       // Execute task
       const taskId = await agent8Client.createTask(taskRequest);
-      console.log(`[Container-Reporter] Agent8 task created: ${taskId}`);
 
       // Monitor task completion
-      let task = await agent8Client.getTaskStatus(taskId, 'container-task');
+      let task = await agent8Client.getTaskStatus(taskId, "container-task");
       let attempts = 0;
       const maxAttempts = 300; // 5 minutes max (1 second intervals)
 
-      while (task && task.status !== 'completed' && task.status !== 'failed' && attempts < maxAttempts) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        task = await agent8Client.getTaskStatus(taskId, 'container-task');
+      while (
+        task &&
+        task.status !== "completed" &&
+        task.status !== "failed" &&
+        attempts < maxAttempts
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        task = await agent8Client.getTaskStatus(taskId, "container-task");
         attempts++;
-
-        if (attempts % 10 === 0) {
-          console.log(`[Container-Reporter] Task ${taskId} status: ${task?.status}, progress: ${task?.progress}%`);
-        }
       }
 
       if (!task) {
-        throw new Error('Task not found or was removed');
+        throw new Error("Task not found or was removed");
       }
 
-      if (task.status === 'failed') {
-        throw new Error(task.error || 'Task execution failed');
+      if (task.status === "failed") {
+        throw new Error(task.error || "Task execution failed");
       }
 
-      if (task.status !== 'completed') {
-        throw new Error('Task execution timed out');
+      if (task.status !== "completed") {
+        throw new Error("Task execution timed out");
       }
 
       // Extract results from completed task
@@ -168,11 +150,10 @@ export class ContainerTaskReporter {
         executedActions: result.executedActions || 0,
         failedActions: result.failedActions || 0,
         artifacts: result.artifacts || [],
-        textChunks: result.textChunks || 'Task completed successfully.',
+        textChunks: result.textChunks || "Task completed successfully.",
       };
-
     } catch (error) {
-      console.error(`[Container-Reporter] Agent8 task execution failed:`, error);
+      console.error("[Container-Reporter] Agent8 task execution failed:", error);
       throw error;
     }
   }
@@ -183,11 +164,11 @@ export class ContainerTaskReporter {
   private async reportToGitLab(
     gitlabInfo: GitLabInfo,
     result: TaskResult,
-    status: 'completed' | 'failed',
-    executionTime: number
+    status: "completed" | "failed",
+    executionTime: number,
   ): Promise<void> {
     if (!this.gitlabToken) {
-      console.error('[Container-Reporter] Cannot report to GitLab: GITLAB_TOKEN not available');
+      console.error("[Container-Reporter] Cannot report to GitLab: GITLAB_TOKEN not available");
       return;
     }
 
@@ -196,37 +177,34 @@ export class ContainerTaskReporter {
 
       const url = `${this.gitlabBaseUrl}/api/v4/projects/${gitlabInfo.projectId}/issues/${gitlabInfo.issueIid}/notes`;
 
-      console.log(`[Container-Reporter] Posting result to GitLab: ${url}`);
-
       const response = await fetch(url, {
-        method: 'POST',
+        method: "POST",
         headers: {
-          'Authorization': `Bearer ${this.gitlabToken}`,
-          'Content-Type': 'application/json'
+          Authorization: `Bearer ${this.gitlabToken}`,
+          "Content-Type": "application/json",
         },
-        body: JSON.stringify({ body: comment })
+        body: JSON.stringify({ body: comment }),
       });
 
-      if (response.ok) {
-        console.log(`[Container-Reporter] ✅ Successfully reported ${status} to GitLab issue #${gitlabInfo.issueIid}`);
-      } else {
+      if (!response.ok) {
         const errorText = await response.text();
-        console.error(`[Container-Reporter] ❌ Failed to report to GitLab (${response.status}): ${errorText}`);
+        console.error(
+          `[Container-Reporter] ❌ Failed to report to GitLab (${response.status}): ${errorText}`,
+        );
 
         // Retry once after a delay
-        await new Promise(resolve => setTimeout(resolve, 5000));
+        await new Promise((resolve) => setTimeout(resolve, 5000));
         await this.retryGitLabReport(url, comment, gitlabInfo.issueIid);
       }
-
     } catch (error) {
-      console.error(`[Container-Reporter] ❌ Error reporting to GitLab:`, error);
+      console.error("[Container-Reporter] ❌ Error reporting to GitLab:", error);
 
       // Retry once after a delay
-      await new Promise(resolve => setTimeout(resolve, 5000));
+      await new Promise((resolve) => setTimeout(resolve, 5000));
       await this.retryGitLabReport(
         `${this.gitlabBaseUrl}/api/v4/projects/${gitlabInfo.projectId}/issues/${gitlabInfo.issueIid}/notes`,
         this.generateResultComment(gitlabInfo, result, status, executionTime),
-        gitlabInfo.issueIid
+        gitlabInfo.issueIid,
       );
     }
   }
@@ -236,22 +214,20 @@ export class ContainerTaskReporter {
    */
   private async retryGitLabReport(url: string, comment: string, issueIid: number): Promise<void> {
     try {
-      console.log(`[Container-Reporter] Retrying GitLab report for issue #${issueIid}...`);
-
       const response = await fetch(url, {
-        method: 'POST',
+        method: "POST",
         headers: {
-          'Authorization': `Bearer ${this.gitlabToken}`,
-          'Content-Type': 'application/json'
+          Authorization: `Bearer ${this.gitlabToken}`,
+          "Content-Type": "application/json",
         },
-        body: JSON.stringify({ body: comment })
+        body: JSON.stringify({ body: comment }),
       });
 
-      if (response.ok) {
-        console.log(`[Container-Reporter] ✅ Retry successful for issue #${issueIid}`);
-      } else {
+      if (!response.ok) {
         const errorText = await response.text();
-        console.error(`[Container-Reporter] ❌ Retry failed for issue #${issueIid} (${response.status}): ${errorText}`);
+        console.error(
+          `[Container-Reporter] ❌ Retry failed for issue #${issueIid} (${response.status}): ${errorText}`,
+        );
       }
     } catch (error) {
       console.error(`[Container-Reporter] ❌ Retry error for issue #${issueIid}:`, error);
@@ -264,29 +240,32 @@ export class ContainerTaskReporter {
   private generateResultComment(
     gitlabInfo: GitLabInfo,
     result: TaskResult,
-    status: 'completed' | 'failed',
-    executionTime: number
+    status: "completed" | "failed",
+    executionTime: number,
   ): string {
-    const statusEmoji = status === 'completed' ? '✅' : '❌';
+    const statusEmoji = status === "completed" ? "✅" : "❌";
     const executionTimeFormatted = `${(executionTime / 1000).toFixed(1)}s`;
 
     // Build artifact list
-    let artifactList = '';
+    let artifactList = "";
     if (result.artifacts && result.artifacts.length > 0) {
-      artifactList = result.artifacts.slice(0, 10).map(artifact => {
-        return `- \`${artifact.title || 'Untitled'}\` (${artifact.type || 'file'})`;
-      }).join('\n');
+      artifactList = result.artifacts
+        .slice(0, 10)
+        .map((artifact) => {
+          return `- \`${artifact.title || "Untitled"}\` (${artifact.type || "file"})`;
+        })
+        .join("\n");
 
       if (result.artifacts.length > 10) {
         artifactList += `\n- ... and ${result.artifacts.length - 10} more files`;
       }
     } else {
-      artifactList = '_No files were created or modified_';
+      artifactList = "_No files were created or modified_";
     }
 
-    const containerUrl = `https://${process.env.TARGET_APP_NAME || 'agent8'}-${gitlabInfo.containerId}.${process.env.FLY_ROUTER_DOMAIN || 'agent8.verse8.net'}`;
+    const containerUrl = `https://${process.env.TARGET_APP_NAME || "agent8"}-${gitlabInfo.containerId}.${process.env.FLY_ROUTER_DOMAIN || "agent8.verse8.net"}`;
 
-    let comment = `## ${statusEmoji} Agent8 Task ${status === 'completed' ? 'Completion' : 'Failure'} Report
+    let comment = `## ${statusEmoji} Agent8 Task ${status === "completed" ? "Completion" : "Failure"} Report
 
 **Container**: \`${gitlabInfo.containerId}\`
 **Execution Time**: ${executionTimeFormatted}
@@ -301,10 +280,10 @@ export class ContainerTaskReporter {
 ${artifactList}`;
 
     if (result.textChunks) {
-      comment += `\n\n**Task Output**:\n\`\`\`\n${result.textChunks.slice(0, 1000)}${result.textChunks.length > 1000 ? '...' : ''}\n\`\`\``;
+      comment += `\n\n**Task Output**:\n\`\`\`\n${result.textChunks.slice(0, 1000)}${result.textChunks.length > 1000 ? "..." : ""}\n\`\`\``;
     }
 
-    if (status === 'failed' && result.error) {
+    if (status === "failed" && result.error) {
       comment += `\n\n**Error Details**:\n\`\`\`\n${result.error}\n\`\`\``;
     }
 
@@ -328,10 +307,10 @@ export function createTaskEndpoint() {
       const taskPayload: TaskPayload = req.body;
 
       // Validate payload
-      if (!taskPayload.messages || !taskPayload.gitlabInfo) {
+      if (!(taskPayload.messages && taskPayload.gitlabInfo)) {
         return res.status(400).json({
           success: false,
-          error: 'Invalid task payload: missing messages or gitlabInfo'
+          error: "Invalid task payload: missing messages or gitlabInfo",
         });
       }
 
@@ -342,20 +321,19 @@ export function createTaskEndpoint() {
       res.json({
         success: true,
         taskId: taskId,
-        status: 'accepted',
-        message: 'Task accepted for processing'
+        status: "accepted",
+        message: "Task accepted for processing",
       });
 
       // Execute task and report asynchronously
-      reporter.executeTaskAndReport(taskPayload).catch(error => {
-        console.error('[Container-Reporter] Async task execution failed:', error);
+      reporter.executeTaskAndReport(taskPayload).catch((error) => {
+        console.error("[Container-Reporter] Async task execution failed:", error);
       });
-
     } catch (error) {
-      console.error('[Container-Reporter] Endpoint error:', error);
+      console.error("[Container-Reporter] Endpoint error:", error);
       res.status(500).json({
         success: false,
-        error: 'Internal server error'
+        error: "Internal server error",
       });
     }
   };

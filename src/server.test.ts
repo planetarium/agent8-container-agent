@@ -1,6 +1,6 @@
-import { describe, it, expect } from "bun:test";
-import { ensureSafePath } from "./server";
+import { describe, expect, it } from "bun:test";
 import { join, normalize } from "node:path";
+import { ensureSafePath } from "./server.ts";
 
 describe("ensureSafePath", () => {
   const workdir = "/workspace";

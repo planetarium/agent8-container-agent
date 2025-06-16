@@ -1,6 +1,6 @@
-import { PrismaClient } from '@prisma/client';
-import { GitLabIssue, GitLabIssueRecord } from '../types/index.js';
-import { GitLabClient } from '../services/gitlabClient.js';
+import { PrismaClient } from "@prisma/client";
+import { GitLabClient } from "../services/gitlabClient.js";
+import type { GitLabIssue, GitLabIssueRecord } from "../types/index.js";
 
 export class GitLabIssueRepository {
   private prisma: PrismaClient;
@@ -8,28 +8,27 @@ export class GitLabIssueRepository {
 
   constructor(gitlabClient?: GitLabClient) {
     this.prisma = new PrismaClient();
-    this.gitlabClient = gitlabClient || new GitLabClient(
-      process.env.GITLAB_URL || '',
-      process.env.GITLAB_TOKEN || ''
-    );
+    this.gitlabClient =
+      gitlabClient ||
+      new GitLabClient(process.env.GITLAB_URL || "", process.env.GITLAB_TOKEN || "");
   }
 
   async getProcessedIssueIds(): Promise<Set<number>> {
     const issues = await this.prisma.gitlab_issues.findMany({
-      select: { gitlab_issue_id: true, labels: true }
+      select: { gitlab_issue_id: true, labels: true },
     });
 
     // Exclude TODO issues to allow reprocessing
-    const processedIssues = issues.filter(issue => {
+    const processedIssues = issues.filter((issue) => {
       const labels = JSON.parse(issue.labels) as string[];
-      const lifecycleLabel = labels.find(label =>
-        ['TODO', 'WIP', 'CONFIRM NEEDED', 'DONE', 'REJECT'].includes(label)
+      const lifecycleLabel = labels.find((label) =>
+        ["TODO", "WIP", "CONFIRM NEEDED", "DONE", "REJECT"].includes(label),
       );
 
-      return lifecycleLabel !== 'TODO';
+      return lifecycleLabel !== "TODO";
     });
 
-    return new Set(processedIssues.map(issue => issue.gitlab_issue_id));
+    return new Set(processedIssues.map((issue) => issue.gitlab_issue_id));
   }
 
   async markIssueProcessed(issue: GitLabIssue, containerId?: string): Promise<void> {
@@ -37,27 +36,27 @@ export class GitLabIssueRepository {
       where: { gitlab_issue_id: issue.id },
       update: {
         container_id: containerId,
-        processed_at: new Date()
+        processed_at: new Date(),
       },
       create: {
         gitlab_issue_id: issue.id,
         gitlab_iid: issue.iid,
         project_id: issue.project_id,
         title: issue.title,
-        description: issue.description || '',
+        description: issue.description || "",
         labels: JSON.stringify(issue.labels),
         author_username: issue.author.username,
         web_url: issue.web_url,
         created_at: new Date(issue.created_at),
         container_id: containerId,
-      }
+      },
     });
   }
 
   async getLastCheckTime(): Promise<Date | null> {
     const lastIssue = await this.prisma.gitlab_issues.findFirst({
-      orderBy: { processed_at: 'desc' },
-      select: { processed_at: true }
+      orderBy: { processed_at: "desc" },
+      select: { processed_at: true },
     });
 
     return lastIssue?.processed_at || null;
@@ -70,7 +69,7 @@ export class GitLabIssueRepository {
     weekAgo.setDate(weekAgo.getDate() - 7);
 
     const lastWeek = await this.prisma.gitlab_issues.count({
-      where: { processed_at: { gte: weekAgo } }
+      where: { processed_at: { gte: weekAgo } },
     });
 
     return { total, lastWeek };
@@ -78,10 +77,12 @@ export class GitLabIssueRepository {
 
   async findIssueByContainerId(containerId: string): Promise<GitLabIssueRecord | null> {
     const issue = await this.prisma.gitlab_issues.findFirst({
-      where: { container_id: containerId }
+      where: { container_id: containerId },
     });
 
-    if (!issue) return null;
+    if (!issue) {
+      return null;
+    }
 
     return {
       id: issue.id,
@@ -95,16 +96,18 @@ export class GitLabIssueRepository {
       web_url: issue.web_url,
       created_at: issue.created_at,
       processed_at: issue.processed_at,
-      container_id: issue.container_id
+      container_id: issue.container_id,
     };
   }
 
   async findByGitLabIssueId(gitlabIssueId: number): Promise<GitLabIssueRecord | null> {
     const issue = await this.prisma.gitlab_issues.findUnique({
-      where: { gitlab_issue_id: gitlabIssueId }
+      where: { gitlab_issue_id: gitlabIssueId },
     });
 
-    if (!issue) return null;
+    if (!issue) {
+      return null;
+    }
 
     return {
       id: issue.id,
@@ -118,7 +121,7 @@ export class GitLabIssueRepository {
       web_url: issue.web_url,
       created_at: issue.created_at,
       processed_at: issue.processed_at,
-      container_id: issue.container_id
+      container_id: issue.container_id,
     };
   }
 
@@ -127,8 +130,8 @@ export class GitLabIssueRepository {
       where: { gitlab_issue_id: gitlabIssueId },
       data: {
         labels: JSON.stringify(labels),
-        processed_at: new Date()
-      }
+        processed_at: new Date(),
+      },
     });
   }
 
@@ -138,32 +141,31 @@ export class GitLabIssueRepository {
     completionRate: number;
   }> {
     const issues = await this.prisma.gitlab_issues.findMany({
-      select: { labels: true }
+      select: { labels: true },
     });
 
-    const LIFECYCLE_LABELS = ['TODO', 'WIP', 'CONFIRM NEEDED', 'DONE', 'REJECT'];
+    const lifecycleLabels = ["TODO", "WIP", "CONFIRM NEEDED", "DONE", "REJECT"];
     const statusCounts: Record<string, number> = {};
 
-    LIFECYCLE_LABELS.forEach(label => {
+    for (const label of lifecycleLabels) {
       statusCounts[label] = 0;
-    });
-    statusCounts['NO_LABEL'] = 0;
+    }
+
+    statusCounts.NO_LABEL = 0;
 
     let completedCount = 0;
 
     for (const issue of issues) {
       const labels = JSON.parse(issue.labels) as string[];
-      const lifecycleLabel = labels.find(label =>
-        LIFECYCLE_LABELS.includes(label)
-      );
+      const lifecycleLabel = labels.find((label) => lifecycleLabels.includes(label));
 
       if (lifecycleLabel) {
         statusCounts[lifecycleLabel]++;
-        if (lifecycleLabel === 'DONE') {
+        if (lifecycleLabel === "DONE") {
           completedCount++;
         }
       } else {
-        statusCounts['NO_LABEL']++;
+        statusCounts.NO_LABEL++;
       }
     }
 
@@ -173,7 +175,7 @@ export class GitLabIssueRepository {
     return {
       total,
       byStatus: statusCounts,
-      completionRate
+      completionRate,
     };
   }
 
@@ -188,7 +190,7 @@ export class GitLabIssueRepository {
     try {
       const issue = await this.prisma.gitlab_issues.findUnique({
         where: { gitlab_issue_id: gitlabIssueId },
-        select: { created_at: true, container_id: true }
+        select: { created_at: true, container_id: true },
       });
 
       if (issue) {
@@ -196,11 +198,9 @@ export class GitLabIssueRepository {
           where: { gitlab_issue_id: gitlabIssueId },
           data: {
             processed_at: issue.created_at,
-            container_id: null  // Clear previous container ID
-          }
+            container_id: null, // Clear previous container ID
+          },
         });
-
-        console.log(`[Repository] Reset processed_at to created_at and cleared container_id for issue ${gitlabIssueId}`);
       } else {
         console.warn(`[Repository] Issue ${gitlabIssueId} not found for processed_at reset`);
       }

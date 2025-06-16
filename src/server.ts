@@ -24,15 +24,15 @@ import type {
   WatchPathsOptions,
   WatchResponse,
 } from "../protocol/src/index.ts";
-import { Agent8Client } from "./agent8";
-import { AuthManager } from "./auth";
-import { type FlyClient, initializeFlyClient } from "./fly";
-import { MachinePool } from "./fly/machinePool";
-import type { CandidatePort } from "./portScanner";
-import { PortScanner } from "./portScanner/portScanner";
-import type { DirectConnectionData, ProxyData } from "./types";
-import { GitLabApiRoutes } from "./gitlab/api/gitlabApiRoutes.js";
-import { Agent8ApiRoutes } from "./agent8/api/agent8ApiRoutes.js";
+import { Agent8Client } from "./agent8/agent8Client.ts";
+import { Agent8ApiRoutes } from "./agent8/api/agent8ApiRoutes.ts";
+import { AuthManager } from "./auth/index.ts";
+import { type FlyClient, initializeFlyClient } from "./fly/index.ts";
+import { MachinePool } from "./fly/machinePool.ts";
+import { GitLabApiRoutes } from "./gitlab/api/gitlabApiRoutes.ts";
+import type { CandidatePort } from "./portScanner/index.ts";
+import { PortScanner } from "./portScanner/portScanner.ts";
+import type { DirectConnectionData, ProxyData } from "./types.ts";
 
 type WebSocketData = ProxyData | DirectConnectionData;
 
@@ -83,6 +83,9 @@ function corsMiddleware(
   };
 }
 
+const LEADING_SLASH_REGEX = /^\/+/;
+const PATH_SEPARATOR_REGEX = /[\/\\]/;
+
 export class ContainerServer {
   private readonly server: Server;
   private readonly processes: Map<number, ChildProcess>;
@@ -107,7 +110,7 @@ export class ContainerServer {
   private routerDomain: string;
   private appName: string;
   private machineId: string;
-  private flyClientPromise: Promise<FlyClient>;
+  private flyClient: FlyClient;
   private readonly authManager: AuthManager;
   private readonly agent8Client: Agent8Client;
   private readonly connectionLastActivityTime: Map<string, number>;
@@ -164,18 +167,16 @@ export class ContainerServer {
       excludeProcesses: ["bun"], // Exclude bun processes (including this server)
     });
 
-    this.flyClientPromise = initializeFlyClient({
+    this.flyClient = initializeFlyClient({
       apiToken: process.env.FLY_API_TOKEN || "",
       appName: process.env.TARGET_APP_NAME || "",
       imageRef: process.env.FLY_IMAGE_REF || "",
     });
 
     // Initialize machine pool only from pool
-    this.flyClientPromise.then((flyClient) => {
-      this.machinePool = new MachinePool(flyClient, {
-        defaultPoolSize: 10, // Maximum 10 machines
-        checkInterval: 60000, // Check every minute
-      });
+    this.machinePool = new MachinePool(this.flyClient, {
+      defaultPoolSize: 10, // Maximum 10 machines
+      checkInterval: 60000, // Check every minute
     });
 
     this.portScanner.start().then(() => {});
@@ -297,10 +298,8 @@ export class ContainerServer {
             const machineId = (req as any).params.id;
 
             try {
-              const flyClient = await this.flyClientPromise;
-
               // Get machine status directly from Fly API
-              const machine = await flyClient.getMachineStatus(machineId);
+              const machine = await this.flyClient.getMachineStatus(machineId);
               if (!machine) {
                 return Response.json({ error: "Machine not found" }, { status: 404 });
               }
@@ -342,7 +341,7 @@ export class ContainerServer {
           GET: corsMiddleware(async (req: Request) => {
             const host = req.headers.get("host");
             const querySuccess = await Promise.race([
-              (await this.flyClientPromise).listFlyMachines(),
+              this.flyClient.listFlyMachines(),
               setTimeout(1000),
             ])
               .then(() => true)
@@ -353,7 +352,6 @@ export class ContainerServer {
             });
           }),
         },
-
       },
       fetch: corsMiddleware(async (req, server) => {
         // Try GitLab API routes first
@@ -908,7 +906,7 @@ export class ContainerServer {
       !hasActiveTasks
     ) {
       console.info(
-        `No active connections (WS: ${this.activeWs.size}, Agent8 tasks: ${activeTasksCount}), releasing server`
+        `No active connections (WS: ${this.activeWs.size}, Agent8 tasks: ${activeTasksCount}), releasing server`,
       );
       this.stop();
     }
@@ -963,8 +961,7 @@ export class ContainerServer {
         );
       } else {
         try {
-          const flyClient = await this.flyClientPromise;
-          await flyClient.destroyMachine(this.machineId);
+          await this.flyClient.destroyMachine(this.machineId);
           console.info(`[Self-destruction] Machine ${this.machineId} has been destroyed in Fly`);
         } catch (error) {
           console.error(
@@ -1153,7 +1150,7 @@ export class ContainerServer {
           return false;
         }
 
-        const relPath = path.replace(this.config.workdirName, "").replace(/^\/+/, "");
+        const relPath = path.replace(this.config.workdirName, "").replace(LEADING_SLASH_REGEX, "");
         const isParentOfPattern =
           options.include &&
           options.include.length > 0 &&
@@ -1308,7 +1305,7 @@ export function ensureSafePath(workdir: string, userPath: string): string {
   return join(
     normalizedWorkdir,
     userPath
-      .split(/[\/\\]/)
+      .split(PATH_SEPARATOR_REGEX)
       .filter((segment) => segment !== "..")
       .join("/"),
   );

@@ -1,4 +1,4 @@
-const server = globalThis.Bun.serve({
+const _server = globalThis.Bun.serve({
   port: 5174,
   fetch(req) {
     const url = new URL(req.url);

@@ -1,3 +1,14 @@
+const CODEBLOCK_LANGUAGE_REGEX = /^```[\w-]*\n?/gm;
+const CODEBLOCK_END_REGEX = /\n?```$/gm;
+const WHITESPACE_START_REGEX = /^\s*/;
+const HTML_ESCAPE_PATTERNS = {
+  LT: /&lt;/g,
+  GT: /&gt;/g,
+  AMP: /&amp;/g,
+  QUOT: /&quot;/g,
+  APOS: /&#x27;/g,
+};
+
 /**
  * Remove extra indentation and normalize file content
  */
@@ -9,7 +20,9 @@ export function cleanoutFileContent(code: string): string {
     return code;
   }
 
-  const minIndent = Math.min(...nonEmptyLines.map((line) => line.match(/^\s*/)?.[0].length ?? 0));
+  const minIndent = Math.min(
+    ...nonEmptyLines.map((line) => line.match(WHITESPACE_START_REGEX)?.[0].length ?? 0),
+  );
 
   return lines
     .map((line) => (line.trim() === "" ? "" : line.slice(minIndent)))
@@ -22,7 +35,7 @@ export function cleanoutFileContent(code: string): string {
  */
 export function cleanoutCodeblockSyntax(code: string): string {
   // Remove language identifiers like ```javascript, ```python, etc.
-  return code.replace(/^```[\w-]*\n?/gm, "```\n").replace(/\n?```$/gm, "\n```");
+  return code.replace(CODEBLOCK_LANGUAGE_REGEX, "```\n").replace(CODEBLOCK_END_REGEX, "\n```");
 }
 
 /**
@@ -30,11 +43,11 @@ export function cleanoutCodeblockSyntax(code: string): string {
  */
 export function cleanEscapedTags(content: string): string {
   return content
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&amp;/g, "&")
-    .replace(/&quot;/g, '"')
-    .replace(/&#x27;/g, "'");
+    .replace(HTML_ESCAPE_PATTERNS.LT, "<")
+    .replace(HTML_ESCAPE_PATTERNS.GT, ">")
+    .replace(HTML_ESCAPE_PATTERNS.AMP, "&")
+    .replace(HTML_ESCAPE_PATTERNS.QUOT, '"')
+    .replace(HTML_ESCAPE_PATTERNS.APOS, "'");
 }
 
 /**

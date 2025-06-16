@@ -34,7 +34,7 @@ export class ContainerAuthClient {
   private email: string;
   private renewalThresholdMinutes: number;
 
-  constructor(authServerUrl: string, email: string, renewalThresholdMinutes: number = 10) {
+  constructor(authServerUrl: string, email: string, renewalThresholdMinutes = 10) {
     this.authServerUrl = authServerUrl;
     this.email = email;
     this.renewalThresholdMinutes = renewalThresholdMinutes;
@@ -44,15 +44,15 @@ export class ContainerAuthClient {
    * Authenticate with Agent8 server and receive JWT token
    */
   async authenticate(): Promise<string> {
-    const { createContainerAuthRequest } = require('./ecdsaUtil');
+    const { createContainerAuthRequest } = require("./ecdsaUtil.ts");
 
     try {
       const authRequest = createContainerAuthRequest(this.email);
 
       const response = await fetch(`${this.authServerUrl}/auth/container`, {
-        method: 'POST',
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json',
+          "Content-Type": "application/json",
         },
         body: JSON.stringify(authRequest),
       });
@@ -61,18 +61,17 @@ export class ContainerAuthClient {
         throw new Error(`Authentication failed: ${response.status} ${response.statusText}`);
       }
 
-      const result = await response.json() as AuthenticationResult;
+      const result = (await response.json()) as AuthenticationResult;
 
       if (!result.accessToken) {
-        throw new Error('No access token received from authentication server');
+        throw new Error("No access token received from authentication server");
       }
 
       this.setToken(result.accessToken);
-      console.log('[ContainerAuth] Authentication successful');
 
       return result.accessToken;
     } catch (error) {
-      console.error('[ContainerAuth] Authentication failed:', error);
+      console.error("[ContainerAuth] Authentication failed:", error);
       throw error;
     }
   }
@@ -82,16 +81,14 @@ export class ContainerAuthClient {
    */
   async getValidToken(): Promise<string> {
     if (!this.currentToken || this.isExpired()) {
-      console.log('[ContainerAuth] Token expired or missing, authenticating...');
       return await this.authenticate();
     }
 
     if (this.needsRenewal()) {
-      console.log('[ContainerAuth] Token needs renewal, re-authenticating...');
       try {
         return await this.authenticate();
       } catch (error) {
-        console.warn('[ContainerAuth] Token renewal failed, using existing token:', error);
+        console.warn("[ContainerAuth] Token renewal failed, using existing token:", error);
         if (this.currentToken && !this.isExpired()) {
           return this.currentToken;
         }
@@ -110,7 +107,7 @@ export class ContainerAuthClient {
 
     const headers = {
       ...options.headers,
-      'Authorization': `Bearer ${token}`,
+      Authorization: `Bearer ${token}`,
     };
 
     return fetch(url, {
@@ -131,12 +128,12 @@ export class ContainerAuthClient {
    * Check if current token needs renewal
    */
   private needsRenewal(): boolean {
-    if (!this.tokenPayload || !this.tokenPayload.exp) {
+    if (!this.tokenPayload?.exp) {
       return true;
     }
 
     const now = Math.floor(Date.now() / 1000);
-    const renewalTime = this.tokenPayload.exp - (this.renewalThresholdMinutes * 60);
+    const renewalTime = this.tokenPayload.exp - this.renewalThresholdMinutes * 60;
 
     return now >= renewalTime;
   }
@@ -145,7 +142,7 @@ export class ContainerAuthClient {
    * Check if current token is expired
    */
   private isExpired(): boolean {
-    if (!this.tokenPayload || !this.tokenPayload.exp) {
+    if (!this.tokenPayload?.exp) {
       return true;
     }
 
@@ -158,15 +155,15 @@ export class ContainerAuthClient {
    */
   private decodeJWTPayload(token: string): ContainerJWTPayload | null {
     try {
-      const parts = token.split('.');
+      const parts = token.split(".");
       if (parts.length !== 3) {
         return null;
       }
 
-      const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString());
+      const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString());
       return payload as ContainerJWTPayload;
     } catch (error) {
-      console.error('[ContainerAuth] Failed to decode JWT payload:', error);
+      console.error("[ContainerAuth] Failed to decode JWT payload:", error);
       return null;
     }
   }
@@ -188,5 +185,3 @@ export class ContainerAuthClient {
     };
   }
 }
-
-

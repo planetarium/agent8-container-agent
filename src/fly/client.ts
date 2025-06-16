@@ -1,4 +1,4 @@
-import { FlyConfig, Machine, CreateMachineOptions } from './types';
+import type { CreateMachineOptions, FlyConfig, Machine } from "./types.ts";
 
 export class FlyClient {
   private config: FlyConfig;
@@ -8,17 +8,19 @@ export class FlyClient {
   constructor(config: FlyConfig) {
     this.config = {
       ...config,
-      baseUrl: config.baseUrl || 'https://api.machines.dev/v1'
+      baseUrl: config.baseUrl || "https://api.machines.dev/v1",
     };
     this.updateFallbackRegions();
   }
 
   async updateFallbackRegions(): Promise<void> {
-    if (!this.fallbackRegions.length) {
-      const res = await fetch(`https://api.machines.dev/v1/platform/regions`);
-      this.fallbackRegions = (await res.json() as { Regions: Record<string, unknown>[] }).Regions
-        .filter((region) => !region.requires_paid_plan && (region.capacity as number) > 100)
-        .map((region) => region.code as string);
+    if (this.fallbackRegions.length === 0) {
+      const res = await fetch("https://api.machines.dev/v1/platform/regions");
+      this.fallbackRegions = (
+        (await res.json()) as { Regions: Record<string, unknown>[] }
+      ).Regions.filter(
+        (region) => !region.requires_paid_plan && (region.capacity as number) > 100,
+      ).map((region) => region.code as string);
     }
   }
 
@@ -26,7 +28,7 @@ export class FlyClient {
    * Creates a Fly machine
    * @param options - Machine creation options
    */
-  async createMachine(options: CreateMachineOptions, retry: number = 0): Promise<Machine> {
+  async createMachine(options: CreateMachineOptions, retry = 0): Promise<Machine> {
     try {
       const res = await fetch(`${this.config.baseUrl}/apps/${this.config.appName}/machines`, {
         method: "POST",
@@ -50,9 +52,12 @@ export class FlyClient {
 
       if (!res.ok) {
         if (retry < this.RETRY_LIMIT) {
-          await new Promise(resolve => setTimeout(resolve, 1000));
+          await new Promise((resolve) => setTimeout(resolve, 1000));
           const randomIdx = Math.floor(Math.random() * this.fallbackRegions.length);
-          return this.createMachine({ ...options, region: this.fallbackRegions[randomIdx] }, retry + 1);
+          return this.createMachine(
+            { ...options, region: this.fallbackRegions[randomIdx] },
+            retry + 1,
+          );
         }
         throw new Error(`HTTP ${res.status} - ${res.statusText}`);
       }
@@ -68,14 +73,17 @@ export class FlyClient {
    * Destroys a machine from the Fly API.
    */
   async destroyMachine(machineId: string): Promise<void> {
-    const res = await fetch(`${this.config.baseUrl}/apps/${this.config.appName}/machines/${machineId}?force=true`, {
-      method: "DELETE",
-      headers: {
-        Authorization: `Bearer ${this.config.apiToken}`,
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      }
-    });
+    const res = await fetch(
+      `${this.config.baseUrl}/apps/${this.config.appName}/machines/${machineId}?force=true`,
+      {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${this.config.apiToken}`,
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+      },
+    );
 
     if (!res.ok) {
       throw new Error(`HTTP ${res.status} - ${res.statusText}`);
@@ -93,13 +101,16 @@ export class FlyClient {
    */
   async getMachineStatus(machineId: string): Promise<Machine | null> {
     try {
-      const res = await fetch(`${this.config.baseUrl}/apps/${this.config.appName}/machines/${machineId}`, {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${this.config.apiToken}`,
-          Accept: "application/json",
+      const res = await fetch(
+        `${this.config.baseUrl}/apps/${this.config.appName}/machines/${machineId}`,
+        {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${this.config.apiToken}`,
+            Accept: "application/json",
+          },
         },
-      });
+      );
 
       if (!res.ok) {
         if (res.status === 404) {
@@ -109,7 +120,7 @@ export class FlyClient {
         return null;
       }
 
-      return await res.json() as Machine;
+      return (await res.json()) as Machine;
     } catch (e: unknown) {
       console.error("Fly API error:", e instanceof Error ? e.message : e);
       return null;

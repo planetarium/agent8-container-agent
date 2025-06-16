@@ -10,7 +10,7 @@ export interface TaskDelegationOptions {
 export interface TaskDelegationResult {
   taskId: string;
   containerId: string;
-  status: 'pending' | 'started' | 'completed' | 'failed';
+  status: "pending" | "started" | "completed" | "failed";
   error?: string;
   result?: any;
   startTime: Date;
@@ -25,7 +25,7 @@ export interface TaskStatusResult {
 
 export interface AgentTask {
   id: string;
-  status: 'pending' | 'running' | 'completed' | 'failed';
+  status: "pending" | "running" | "completed" | "failed";
   progress?: number;
   result?: {
     executedActions: number;

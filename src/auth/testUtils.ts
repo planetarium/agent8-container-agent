@@ -1,4 +1,4 @@
-import { createVerify, KeyObject, createPublicKey } from 'node:crypto';
+import { type KeyObject, createPublicKey, createVerify } from "node:crypto";
 
 /**
  * ECDSA P-256 Test Utilities
@@ -19,7 +19,7 @@ export function loadPublicKey(): KeyObject {
 
   const publicKeyPem = process.env.CONTAINER_PUBLIC_KEY_PEM;
   if (!publicKeyPem) {
-    throw new Error('CONTAINER_PUBLIC_KEY_PEM environment variable is required for testing');
+    throw new Error("CONTAINER_PUBLIC_KEY_PEM environment variable is required for testing");
   }
 
   try {
@@ -38,12 +38,12 @@ export function verifySignature(userEmail: string, timestamp: number, signature:
     const message = `${userEmail}:${timestamp}`;
     const publicKeyObj = loadPublicKey();
 
-    const verify = createVerify('sha256');
+    const verify = createVerify("sha256");
     verify.update(message);
 
-    return verify.verify(publicKeyObj, signature, 'base64');
+    return verify.verify(publicKeyObj, signature, "base64");
   } catch (error) {
-    console.error('[ECDSA-Test] Signature verification failed:', error);
+    console.error("[ECDSA-Test] Signature verification failed:", error);
     return false;
   }
 }
@@ -59,7 +59,7 @@ export function verifyContainerAuthRequest(request: {
   const { userEmail, timestamp, signature } = request;
 
   // Import validateTimestamp from the main module
-  const { validateTimestamp } = require('./ecdsaUtil.js');
+  const { validateTimestamp } = require("./ecdsaUtil.js");
 
   if (!validateTimestamp(timestamp)) {
     return false;

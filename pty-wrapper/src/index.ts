@@ -1,5 +1,4 @@
-import * as pty from 'node-pty';
-import { spawn } from 'child_process';
+import * as pty from "node-pty";
 
 /**
  * A simple wrapper around node-pty to provide terminal emulation capabilities
@@ -21,10 +20,10 @@ const filteredArgs: string[] = [];
 for (let i = 0; i < args.length; i++) {
   const arg = args[i];
 
-  if (arg.startsWith('--cols=')) {
-    cols = parseInt(arg.substring(7), 10);
-  } else if (arg.startsWith('--rows=')) {
-    rows = parseInt(arg.substring(7), 10);
+  if (arg.startsWith("--cols=")) {
+    cols = Number.parseInt(arg.substring(7), 10);
+  } else if (arg.startsWith("--rows=")) {
+    rows = Number.parseInt(arg.substring(7), 10);
   } else {
     filteredArgs.push(arg);
   }
@@ -42,7 +41,7 @@ if (!command) {
 
 // Create PTY instance
 const ptyProcess = pty.spawn(command, commandArgs, {
-  name: 'xterm-color',
+  name: "xterm-color",
   cols,
   rows,
   cwd: process.cwd(),
@@ -52,18 +51,18 @@ const ptyProcess = pty.spawn(command, commandArgs, {
 });
 
 // Forward data from PTY to stdout
-ptyProcess.onData(data => {
+ptyProcess.onData((data) => {
   process.stdout.write(data);
 });
 
 // Forward data from stdin to PTY
-process.stdin.on('data', (data) => {
+process.stdin.on("data", (data) => {
   ptyProcess.write(data.toString());
 });
 
 // Forward resize events
-process.on('message', (message: any) => {
-  if (message && message.type === 'resize' && message.cols && message.rows) {
+process.on("message", (message: any) => {
+  if (message && message.type === "resize" && message.cols && message.rows) {
     ptyProcess.resize(message.cols, message.rows);
   }
 });
@@ -74,10 +73,10 @@ ptyProcess.onExit(({ exitCode }) => {
 });
 
 // Handle signals
-process.on('SIGTERM', () => {
+process.on("SIGTERM", () => {
   ptyProcess.kill();
 });
 
-process.on('SIGINT', () => {
+process.on("SIGINT", () => {
   ptyProcess.kill();
 });

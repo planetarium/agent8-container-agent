@@ -1,12 +1,12 @@
-import { GitLabLabelService } from '../services/gitlabLabelService.js';
-import { GitLabIssueRepository } from '../repositories/gitlabIssueRepository.js';
+import type { GitLabIssueRepository } from "../repositories/gitlabIssueRepository.js";
+import type { GitLabLabelService } from "../services/gitlabLabelService.js";
 import {
-  GitLabIssue,
-  LifecycleLabel,
-  IssueRetryState,
-  LabelChangeEvent,
-  LIFECYCLE_LABELS
-} from '../types/index.js';
+  type GitLabIssue,
+  type IssueRetryState,
+  LIFECYCLE_LABELS,
+  type LabelChangeEvent,
+  type LifecycleLabel,
+} from "../types/index.js";
 
 // Issue completion event type definition
 export interface IssueCompletionEvent {
@@ -24,10 +24,7 @@ export class IssueLifecycleWorkflow {
   private retryStates: Map<number, IssueRetryState> = new Map();
   private issueCompletionListeners: Set<IssueCompletionListener> = new Set();
 
-  constructor(
-    labelService: GitLabLabelService,
-    issueRepository: GitLabIssueRepository
-  ) {
+  constructor(labelService: GitLabLabelService, issueRepository: GitLabIssueRepository) {
     this.labelService = labelService;
     this.issueRepository = issueRepository;
   }
@@ -37,7 +34,6 @@ export class IssueLifecycleWorkflow {
    */
   public onIssueCompletion(listener: IssueCompletionListener): void {
     this.issueCompletionListeners.add(listener);
-    console.log(`[Lifecycle] Issue completion listener registered (total: ${this.issueCompletionListeners.size})`);
   }
 
   /**
@@ -45,39 +41,37 @@ export class IssueLifecycleWorkflow {
    */
   public offIssueCompletion(listener: IssueCompletionListener): void {
     this.issueCompletionListeners.delete(listener);
-    console.log(`[Lifecycle] Issue completion listener removed (remaining: ${this.issueCompletionListeners.size})`);
   }
 
   async onContainerCreationStart(issue: GitLabIssue): Promise<void> {
     const currentLabel = this.labelService.getCurrentLifecycleLabel(issue);
 
-    if (currentLabel === 'TODO') {
-      if (this.labelService.isValidTransition(currentLabel, 'WIP')) {
+    if (currentLabel === "TODO") {
+      if (this.labelService.isValidTransition(currentLabel, "WIP")) {
         await this.labelService.updateIssueLifecycleLabel(
           issue,
-          'WIP',
-          'Container creation started'
+          "WIP",
+          "Container creation started",
         );
       }
     } else if (!currentLabel) {
-      console.log(`[Lifecycle] Issue #${issue.iid} has no lifecycle label, skipping container creation`);
+      console.warn(`[Lifecycle] Issue #${issue.iid} has no current label`);
     }
   }
 
-  async onContainerCreationSuccess(issue: GitLabIssue, containerId: string): Promise<void> {
+  onContainerCreationSuccess(issue: GitLabIssue, _containerId: string): void {
     this.retryStates.delete(issue.id);
-    console.log(`[Lifecycle] Container ${containerId} created for issue #${issue.iid}, keeping WIP status`);
   }
 
   async onTaskCompletion(issue: GitLabIssue, taskResult: any): Promise<void> {
     const currentLabel = this.labelService.getCurrentLifecycleLabel(issue);
 
-    if (currentLabel === 'WIP') {
-      if (this.labelService.isValidTransition(currentLabel, 'CONFIRM NEEDED')) {
+    if (currentLabel === "WIP") {
+      if (this.labelService.isValidTransition(currentLabel, "CONFIRM NEEDED")) {
         await this.labelService.updateIssueLifecycleLabel(
           issue,
-          'CONFIRM NEEDED',
-          `Task completed successfully. Container: ${taskResult.containerId || 'unknown'}`
+          "CONFIRM NEEDED",
+          `Task completed successfully. Container: ${taskResult.containerId || "unknown"}`,
         );
       }
     }
@@ -92,11 +86,11 @@ export class IssueLifecycleWorkflow {
     retryState.lastError = error.message;
 
     if (retryState.currentAttempt >= retryState.maxAttempts) {
-      if (this.labelService.isValidTransition(currentLabel, 'REJECT')) {
+      if (this.labelService.isValidTransition(currentLabel, "REJECT")) {
         await this.labelService.updateIssueLifecycleLabel(
           issue,
-          'REJECT',
-          `Container creation failed after ${retryState.maxAttempts} attempts. Last error: ${error.message}`
+          "REJECT",
+          `Container creation failed after ${retryState.maxAttempts} attempts. Last error: ${error.message}`,
         );
       }
 
@@ -104,45 +98,40 @@ export class IssueLifecycleWorkflow {
     } else {
       const nextRetryMinutes = 30 * retryState.currentAttempt;
       retryState.nextRetryAt = new Date(Date.now() + nextRetryMinutes * 60 * 1000);
-
-      console.log(`[Lifecycle] Issue #${issue.iid} will retry in ${nextRetryMinutes} minutes (attempt ${retryState.currentAttempt}/${retryState.maxAttempts})`);
     }
   }
 
   async onTaskExecutionFailure(issue: GitLabIssue, error: Error): Promise<void> {
     const currentLabel = this.labelService.getCurrentLifecycleLabel(issue);
 
-    if (this.labelService.isValidTransition(currentLabel, 'REJECT')) {
+    if (this.labelService.isValidTransition(currentLabel, "REJECT")) {
       await this.labelService.updateIssueLifecycleLabel(
         issue,
-        'REJECT',
-        `Task execution failed: ${error.message}`
+        "REJECT",
+        `Task execution failed: ${error.message}`,
       );
     }
   }
 
   async onLabelChange(labelChangeEvent: LabelChangeEvent): Promise<void> {
-    const { issue, previousLabels, currentLabels } = labelChangeEvent;
+    const { issue, previousLabels } = labelChangeEvent;
 
-    const previousLifecycleLabel = previousLabels.find(
-      label => LIFECYCLE_LABELS.includes(label as LifecycleLabel)
+    const previousLifecycleLabel = previousLabels.find((label) =>
+      LIFECYCLE_LABELS.includes(label as LifecycleLabel),
     ) as LifecycleLabel | undefined;
 
     const currentLifecycleLabel = this.labelService.getCurrentLifecycleLabel(issue);
 
-    if (previousLifecycleLabel === 'CONFIRM NEEDED' && currentLifecycleLabel === 'DONE') {
-      console.log(`[Lifecycle] Issue #${issue.iid} confirmed as DONE by external system`);
+    if (previousLifecycleLabel === "CONFIRM NEEDED" && currentLifecycleLabel === "DONE") {
       await this.handleIssueCompletion(issue);
     }
 
-    if (previousLifecycleLabel === 'REJECT' && currentLifecycleLabel === 'TODO') {
-      console.log(`[Lifecycle] Issue #${issue.iid} restarted from REJECT to TODO`);
+    if (previousLifecycleLabel === "REJECT" && currentLifecycleLabel === "TODO") {
       this.retryStates.delete(issue.id);
 
       // Reset processed_at to created_at to allow reprocessing
       try {
         await this.issueRepository.resetProcessedTime(issue.id);
-        console.log(`[Lifecycle] Issue #${issue.iid} processed_at reset for reprocessing`);
       } catch (error) {
         console.error(`[Lifecycle] Failed to reset processed_at for issue #${issue.iid}:`, error);
       }
@@ -152,25 +141,21 @@ export class IssueLifecycleWorkflow {
   getIssuesReadyForRetry(): IssueRetryState[] {
     const now = new Date();
     return Array.from(this.retryStates.values()).filter(
-      state => state.nextRetryAt && state.nextRetryAt <= now
+      (state) => state.nextRetryAt && state.nextRetryAt <= now,
     );
   }
 
   private async handleIssueCompletion(issue: GitLabIssue): Promise<void> {
     const issueRecord = await this.issueRepository.findByGitLabIssueId(issue.id);
     if (issueRecord?.container_id) {
-      console.log(`[Lifecycle] Issue #${issue.iid} completed, notifying listeners for container ${issueRecord.container_id}`);
-
       // Publish event
       const event: IssueCompletionEvent = {
         issue,
         containerId: issueRecord.container_id,
-        timestamp: new Date()
+        timestamp: new Date(),
       };
 
       await this.notifyIssueCompletionListeners(event);
-
-      console.log(`[Lifecycle] Issue #${issue.iid} completion event processed, container ${issueRecord.container_id} can be cleaned up`);
     }
   }
 
@@ -179,22 +164,18 @@ export class IssueLifecycleWorkflow {
    */
   private async notifyIssueCompletionListeners(event: IssueCompletionEvent): Promise<void> {
     if (this.issueCompletionListeners.size === 0) {
-      console.log(`[Lifecycle] No listeners registered for issue completion event`);
       return;
     }
-
-    console.log(`[Lifecycle] Notifying ${this.issueCompletionListeners.size} listeners about issue #${event.issue.iid} completion`);
 
     const promises = Array.from(this.issueCompletionListeners).map(async (listener) => {
       try {
         await listener(event);
       } catch (error) {
-        console.error(`[Lifecycle] Error in issue completion listener:`, error);
+        console.error("[Lifecycle] Error in issue completion listener:", error);
       }
     });
 
     await Promise.all(promises);
-    console.log(`[Lifecycle] All listeners notified for issue #${event.issue.iid}`);
   }
 
   private getOrCreateRetryState(issue: GitLabIssue): IssueRetryState {
@@ -205,7 +186,7 @@ export class IssueLifecycleWorkflow {
         issueId: issue.id,
         currentAttempt: 0,
         maxAttempts: 3,
-        lastAttemptAt: new Date()
+        lastAttemptAt: new Date(),
       };
 
       this.retryStates.set(issue.id, retryState);
