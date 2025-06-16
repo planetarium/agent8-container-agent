@@ -33,6 +33,7 @@ import type { CandidatePort } from "./portScanner";
 import { PortScanner } from "./portScanner/portScanner";
 import type { DirectConnectionData, ProxyData } from "./types";
 import { GitLabApiRoutes } from "./gitlab/api/gitlabApiRoutes.js";
+import { Agent8ApiRoutes } from "./agent8/api/agent8ApiRoutes.js";
 import type { BackgroundTaskRequest, BackgroundTaskResponse } from "./agent8/types/api.js";
 
 type WebSocketData = ProxyData | DirectConnectionData;
@@ -120,6 +121,7 @@ export class ContainerServer {
   private latestOpenPort: number | null = null;
   private agentUid: number;
   private gitlabApiRoutes: GitLabApiRoutes;
+  private agent8ApiRoutes: Agent8ApiRoutes;
 
   constructor(config: {
     port: number;
@@ -153,6 +155,9 @@ export class ContainerServer {
 
     // Initialize GitLab API routes
     this.gitlabApiRoutes = new GitLabApiRoutes();
+
+    // Initialize Agent8 API routes
+    this.agent8ApiRoutes = new Agent8ApiRoutes(this.agent8Client);
 
     this.portScanner = new PortScanner({
       scanIntervalMs: 2000,
@@ -460,6 +465,12 @@ export class ContainerServer {
         const gitlabResponse = await this.gitlabApiRoutes.handleRequest(req);
         if (gitlabResponse) {
           return gitlabResponse;
+        }
+
+        // Try Agent8 API routes
+        const agent8Response = await this.agent8ApiRoutes.handleRequest(req);
+        if (agent8Response) {
+          return agent8Response;
         }
 
         // Handle WebSocket upgrade requests

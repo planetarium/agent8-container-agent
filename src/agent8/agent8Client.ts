@@ -26,7 +26,53 @@ import type { GitCommitPushResult, GitCommitResult } from '../gitlab/types/git.j
 import type { IssueCompletionEvent } from '../gitlab/workflows/issueLifecycleWorkflow.js';
 import type { FileMap } from './types/fileMap.js';
 import { FileMapBuilder } from './utils/fileMapBuilder.js';
+import { UseChatAdapter } from './utils/useChatAdapter.js';
+import { promises as fs } from 'fs';
+import path from 'path';
 
+
+interface TaskResponseData {
+  taskId: string;
+  userId: string;
+  timestamp: string;
+
+  // LLM server request data
+  request: {
+    url: string;
+    method: string;
+    headers: Record<string, string>;
+    payload: string;  // JSON stringified full request
+    sentAt: string;
+  };
+
+  // LLM server response data (AI SDK Data Stream Protocol)
+  response: {
+    status: number;
+    statusText: string;
+    headers: Record<string, string>;
+    rawContent: string;  // Full AI SDK Data Stream
+    receivedAt: string;
+    duration: number;
+    stats: {
+      totalLines: number;
+      textLines: number;      // Lines starting with '0:'
+      annotationLines: number; // Lines starting with '2:' or '8:'
+      metadataLines: number;   // Lines starting with 'f:', 'e:', or 'd:'
+    };
+  };
+
+  // GitLab information
+  gitlabInfo?: GitLabInfo;
+
+  // Agent8 processing results summary
+  processing: {
+    artifactsCount: number;
+    actionsCount: number;
+    executedActions: number;
+    failedActions: number;
+    textChunksLength: number;
+  };
+}
 
 interface ChatRequest {
   userId: string;
@@ -272,7 +318,7 @@ export class Agent8Client {
       // Step 2: Call LLM server
       console.log(`[Agent8] Task ${taskId} - Step 2: LLM server call started`);
       const llmStartTime = Date.now();
-      const response = await this.callLLMServer(request);
+      const { response, requestData } = await this.callLLMServer(request);
       const llmDuration = Date.now() - llmStartTime;
       console.log(`[Agent8] Task ${taskId} - LLM server call completed (took ${llmDuration}ms)`);
 
@@ -281,7 +327,7 @@ export class Agent8Client {
       // Step 3: Process response
       console.log(`[Agent8] Task ${taskId} - Step 3: Response processing started`);
       const processStartTime = Date.now();
-      const result = await this.processResponse(taskId, response, request);
+      const result = await this.processResponse(taskId, { response, requestData }, request);
       const processDuration = Date.now() - processStartTime;
       console.log(`[Agent8] Task ${taskId} - Response processing completed (took ${processDuration}ms)`);
 
@@ -311,7 +357,7 @@ export class Agent8Client {
     }
   }
 
-  private async callLLMServer(request: ChatRequest): Promise<Response> {
+  private async callLLMServer(request: ChatRequest): Promise<{response: Response, requestData: any}> {
     const startTime = Date.now();
     console.log(`[Agent8] LLM server call started:`, request.targetServerUrl);
 
@@ -367,17 +413,26 @@ export class Agent8Client {
       console.log(`  ${index + 1}. ${msg.role}: ${msg.content.substring(0, 100)}${msg.content.length > 100 ? '...' : ''}`);
     });
 
-    try {
-      // Use the token provided in the request for authentication
-      const authHeaders = {
-        ...headers,
-        'Authorization': `Bearer ${request.token}`,
-      };
+    // Use the token provided in the request for authentication
+    const authHeaders = {
+      ...headers,
+      'Authorization': `Bearer ${request.token}`,
+    };
 
+    // Capture request data for response storage
+    const requestData = {
+      url: request.targetServerUrl,
+      method: 'POST',
+      headers: authHeaders,
+      payload: payloadString,
+      sentAt: new Date().toISOString(),
+    };
+
+    try {
       const response = await fetch(request.targetServerUrl, {
         method: "POST",
         headers: authHeaders,
-        body: JSON.stringify(payload),
+        body: payloadString,
         signal: AbortSignal.timeout(10 * 60 * 1000),
       });
 
@@ -398,7 +453,7 @@ export class Agent8Client {
         );
       }
 
-      return response;
+      return { response, requestData };
     } catch (error: any) {
       const duration = Date.now() - startTime;
       console.error(`[Agent8] LLM server call error (took ${duration}ms):`, error);
@@ -406,28 +461,48 @@ export class Agent8Client {
     }
   }
 
-  private async processResponse(taskId: string, response: Response, request: ChatRequest): Promise<any> {
+  private async processResponse(
+    taskId: string,
+    responseData: { response: Response, requestData: any },
+    request: ChatRequest
+  ): Promise<any> {
     const startTime = Date.now();
-    console.log(`[Agent8] Task ${taskId} - Response processing started`);
+    const { response, requestData } = responseData;
+
+    // Initialize dual file storage (JSON metadata + Raw streaming)
+    const initialMetadata = {
+      taskId,
+      userId: request.userId,
+      timestamp: new Date().toISOString(),
+      request: requestData,
+      response: {
+        status: response.status,
+        statusText: response.statusText,
+        headers: Object.fromEntries(response.headers.entries()),
+        receivedAt: new Date().toISOString(),
+        streaming: true,
+        rawContentFile: `${taskId}.raw`
+      },
+      gitlabInfo: request.gitlabInfo,
+      processing: {}
+    };
+
+    await this.saveMetadata(taskId, initialMetadata);
+    const rawFile = await this.initRawStreamingFile(taskId);
 
     if (!response.body) {
-      console.error(`[Agent8] Task ${taskId} - No response body`);
       throw new Error("No response body received");
     }
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
-    let rawContent = "";
     let chunkCount = 0;
     let totalBytes = 0;
 
-    // Store parsed artifacts and actions
     const artifacts: any[] = [];
     const actions: BoltAction[] = [];
     const actionResults: ActionResult[] = [];
     const textChunks: string[] = [];
-
-    console.log(`[Agent8] Task ${taskId} - Setting up streaming parser callbacks`);
 
     // Set up Agent8 streaming parser callbacks with real-time action execution
     const callbacks: ParserCallbacks = {
@@ -553,30 +628,58 @@ export class Agent8Client {
       while (true) {
         const { done, value } = await reader.read();
         if (done) {
-          console.log(`[Agent8] Task ${taskId} - Streaming completed (total chunks: ${chunkCount}, total bytes: ${totalBytes})`);
+          console.log(`[Agent8] Task ${taskId} - Streaming completed: ${chunkCount} chunks, ${totalBytes} bytes`);
           break;
         }
 
         const chunk = decoder.decode(value, { stream: true });
-        rawContent += chunk;
         chunkCount++;
         totalBytes += chunk.length;
 
-        if (chunkCount % 10 === 0) { // Log every 10 chunks
-          console.log(`[Agent8] Task ${taskId} - Streaming progress: ${chunkCount} chunks, ${totalBytes} bytes`);
+        // Save chunk to raw file immediately (no memory accumulation)
+        await this.appendToRawFile(rawFile, chunk);
+
+        if (chunkCount % 10 === 0) {
+          console.log(`[Agent8] Task ${taskId} - Streaming: ${chunkCount} chunks, ${totalBytes} bytes`);
+        }
+
+        // Force garbage collection for large streams (every 50 chunks)
+        if (chunkCount % 50 === 0) {
+          if (typeof global.gc === 'function') {
+            global.gc();
+          } else if (typeof Bun !== 'undefined' && typeof Bun.gc === 'function') {
+            Bun.gc(true);
+          }
         }
       }
 
-      // Final parsing
-      console.log(`[Agent8] Task ${taskId} - Final parsing started (total content length: ${rawContent.length})`);
+      // Finalize raw file
+      await this.finalizeRawFile(rawFile);
+
+      // Read content from file for final parsing (memory optimized)
+      console.log(`[Agent8] Task ${taskId} - Reading content from file for parsing (${totalBytes} bytes)`);
+      const rawContent = await this.loadRawContent(taskId);
+
+      if (!rawContent) {
+        throw new Error('Failed to read raw content from file for parsing');
+      }
+
       const parseStartTime = Date.now();
       const result = parser.parseDataStream("stream", rawContent);
       const parseDuration = Date.now() - parseStartTime;
-      console.log(`[Agent8] Task ${taskId} - Final parsing completed (took ${parseDuration}ms)`);
+      console.log(`[Agent8] Task ${taskId} - Parsing completed (${parseDuration}ms)`);
+
+            const stats = UseChatAdapter.extractStats(rawContent);
+
+      // Clear rawContent from memory after parsing (memory optimization)
+      const rawContentLength = rawContent.length;
+      // rawContent is no longer needed in memory, file contains the data
 
       const totalDuration = Date.now() - startTime;
+
+      // Prepare final result with memory optimization
       const finalResult = {
-        content: rawContent,
+        content: null, // Do not store raw content in memory, use file instead
         parsedContent: result,
         textChunks: textChunks.join(""),
         artifacts,
@@ -587,24 +690,43 @@ export class Agent8Client {
         timestamp: new Date().toISOString(),
         processed: true,
         type: "chat-response",
+        rawContentFile: `${taskId}.raw`, // Reference to file location
       };
 
-      console.log(`[Agent8] Task ${taskId} - Response processing completed (total took ${totalDuration}ms)`);
-      console.log(`[Agent8] Task ${taskId} - Processing results summary:`, {
-        rawContentLength: rawContent.length,
-        textChunksLength: finalResult.textChunks.length,
-        artifactsCount: artifacts.length,
-        actionsCount: actions.length,
-        successfulActions: finalResult.executedActions,
-        failedActions: finalResult.failedActions,
-        totalChunks: chunkCount,
-        totalBytes: totalBytes,
-      });
+      // Clear large arrays from memory after processing
+      textChunks.length = 0;
+      artifacts.length = 0;
+
+      // Save final metadata
+      const finalMetadata = {
+        ...initialMetadata,
+        response: {
+          ...initialMetadata.response,
+          duration: totalDuration,
+          stats,
+          streaming: false,
+          contentLength: totalBytes,
+          chunkCount
+        },
+        processing: {
+          artifactsCount: artifacts.length,
+          actionsCount: actions.length,
+          executedActions: finalResult.executedActions,
+          failedActions: finalResult.failedActions,
+          textChunksLength: finalResult.textChunks.length,
+          completedAt: new Date().toISOString()
+        }
+      };
+
+      await this.saveMetadata(taskId, finalMetadata);
+
+      console.log(`[Agent8] Task ${taskId} - Processing completed (${totalDuration}ms, memory optimized)`);
+      console.log(`[Agent8] Task ${taskId} - Results: ${artifacts.length} artifacts, ${actions.length} actions, ${finalResult.executedActions} successful`);
 
       return finalResult;
     } finally {
       reader.releaseLock();
-      console.log(`[Agent8] Task ${taskId} - Stream reader released`);
+      await this.closeRawFile(rawFile);
     }
   }
 
@@ -1174,6 +1296,62 @@ Please review the task results and change the issue status to **DONE** if everyt
     }
   }
 
+  private async initRawStreamingFile(taskId: string): Promise<fs.FileHandle> {
+    try {
+      const responseDir = path.join('/', '.agent8', 'llm-responses');
+      await fs.mkdir(responseDir, { recursive: true });
+
+      const rawFilePath = path.join(responseDir, `${taskId}.raw`);
+      const fileHandle = await fs.open(rawFilePath, 'w');
+
+      console.log(`[Agent8] Raw streaming file initialized: ${rawFilePath}`);
+      return fileHandle;
+    } catch (error) {
+      console.error(`[Agent8] Failed to initialize raw streaming file:`, error);
+      throw error;
+    }
+  }
+
+  private async appendToRawFile(fileHandle: fs.FileHandle, chunk: string): Promise<void> {
+    try {
+      await fileHandle.write(chunk, null, 'utf8');
+      await fileHandle.sync();
+    } catch (error) {
+      console.error(`[Agent8] Failed to append to raw file:`, error);
+    }
+  }
+
+  private async finalizeRawFile(fileHandle: fs.FileHandle): Promise<void> {
+    try {
+      await fileHandle.sync();
+      console.log(`[Agent8] Raw streaming file finalized`);
+    } catch (error) {
+      console.error(`[Agent8] Failed to finalize raw file:`, error);
+    }
+  }
+
+  private async closeRawFile(fileHandle: fs.FileHandle): Promise<void> {
+    try {
+      await fileHandle.close();
+    } catch (error) {
+      console.error(`[Agent8] Failed to close raw file:`, error);
+    }
+  }
+
+  private async saveMetadata(taskId: string, metadata: any): Promise<void> {
+    try {
+      const responseDir = path.join('/', '.agent8', 'llm-responses');
+      await fs.mkdir(responseDir, { recursive: true });
+
+      const jsonFile = path.join(responseDir, `${taskId}.json`);
+      await fs.writeFile(jsonFile, JSON.stringify(metadata, null, 2), 'utf8');
+
+      console.log(`[Agent8] Metadata saved: ${jsonFile}`);
+    } catch (error) {
+      console.error(`[Agent8] Failed to save metadata:`, error);
+    }
+  }
+
   private async buildFileMapFromWorkdir(): Promise<FileMap> {
     console.log(`[Agent8] Building FileMap from working directory`);
     const result = await this.fileMapBuilder.buildFileMap();
@@ -1204,5 +1382,132 @@ Please review the task results and change the issue status to **DONE** if everyt
   public cleanup(): void {
     this.stopIssueMonitoring();
     console.log(`[Agent8] Client cleanup completed`);
+  }
+
+  // ========================================
+  // Phase 2: Current Task Access Methods
+  // ========================================
+
+  /**
+   * Get current task ID (1 container = 1 task principle)
+   * Returns the most recent task ID in the container
+   */
+  public async getCurrentTaskId(): Promise<string | null> {
+    try {
+      const responseDir = path.join('/', '.agent8', 'llm-responses');
+
+      // Check if directory exists
+      try {
+        await fs.access(responseDir);
+      } catch {
+        console.log(`[Agent8] No response directory found: ${responseDir}`);
+        return null;
+      }
+
+      const files = await fs.readdir(responseDir);
+      const jsonFiles = files.filter(file => file.endsWith('.json'));
+
+      if (jsonFiles.length === 0) {
+        console.log(`[Agent8] No task metadata files found`);
+        return null;
+      }
+
+      // Find the most recent task (by timestamp in filename)
+      const taskFiles = jsonFiles
+        .map(file => file.replace('.json', ''))
+        .filter(taskId => taskId.startsWith('agent8-task_'))
+        .sort((a, b) => {
+          // Extract timestamp from taskId format: agent8-task_1735123456_abc123
+          const timestampA = parseInt(a.split('_')[1]) || 0;
+          const timestampB = parseInt(b.split('_')[1]) || 0;
+          return timestampB - timestampA; // Most recent first
+        });
+
+      const currentTaskId = taskFiles[0] || null;
+
+      if (currentTaskId) {
+        console.log(`[Agent8] Current task ID found: ${currentTaskId}`);
+      } else {
+        console.log(`[Agent8] No valid task IDs found`);
+      }
+
+      return currentTaskId;
+    } catch (error) {
+      console.error(`[Agent8] Failed to get current task ID:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Load current task's raw content (AI SDK Data Stream)
+   * No taskId required - uses current container's task
+   */
+  public async loadCurrentRawContent(): Promise<string | null> {
+    try {
+      const taskId = await this.getCurrentTaskId();
+      if (!taskId) {
+        console.log(`[Agent8] No current task found for raw content loading`);
+        return null;
+      }
+
+      return await this.loadRawContent(taskId);
+    } catch (error) {
+      console.error(`[Agent8] Failed to load current raw content:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Load current task's metadata
+   * No taskId required - uses current container's task
+   */
+  public async loadCurrentMetadata(): Promise<TaskResponseData | null> {
+    try {
+      const taskId = await this.getCurrentTaskId();
+      if (!taskId) {
+        console.log(`[Agent8] No current task found for metadata loading`);
+        return null;
+      }
+
+      return await this.loadMetadata(taskId);
+    } catch (error) {
+      console.error(`[Agent8] Failed to load current metadata:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Load raw content by taskId (Phase 1 method, kept for backwards compatibility)
+   */
+  public async loadRawContent(taskId: string): Promise<string | null> {
+    try {
+      const responseDir = path.join('/', '.agent8', 'llm-responses');
+      const rawFilePath = path.join(responseDir, `${taskId}.raw`);
+
+      const content = await fs.readFile(rawFilePath, 'utf8');
+      console.log(`[Agent8] Raw content loaded for task ${taskId} (${content.length} chars)`);
+      return content;
+    } catch (error) {
+      console.error(`[Agent8] Failed to load raw content for task ${taskId}:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Load metadata by taskId (Phase 1 method, kept for backwards compatibility)
+   */
+  public async loadMetadata(taskId: string): Promise<TaskResponseData | null> {
+    try {
+      const responseDir = path.join('/', '.agent8', 'llm-responses');
+      const jsonFilePath = path.join(responseDir, `${taskId}.json`);
+
+      const content = await fs.readFile(jsonFilePath, 'utf8');
+      const metadata = JSON.parse(content) as TaskResponseData;
+      console.log(`[Agent8] Metadata loaded for task ${taskId}`);
+      return metadata;
+    } catch (error) {
+      console.error(`[Agent8] Failed to load metadata for task ${taskId}:`, error);
+      return null;
+    }
   }
 }
