@@ -26,7 +26,6 @@ import type { GitCommitPushResult, GitCommitResult } from '../gitlab/types/git.j
 import type { IssueCompletionEvent } from '../gitlab/workflows/issueLifecycleWorkflow.js';
 import type { FileMap } from './types/fileMap.js';
 import { FileMapBuilder } from './utils/fileMapBuilder.js';
-import { UseChatAdapter } from './utils/useChatAdapter.js';
 import { GitLabCommentFormatter } from '../gitlab/utils/commentFormatter.js';
 import type { ErrorDetails, SuccessDetails } from '../gitlab/utils/commentFormatter.js';
 import { promises as fs } from 'fs';
@@ -55,12 +54,9 @@ interface TaskResponseData {
     rawContent: string;  // Full AI SDK Data Stream
     receivedAt: string;
     duration: number;
-    stats: {
-      totalLines: number;
-      textLines: number;      // Lines starting with '0:'
-      annotationLines: number; // Lines starting with '2:' or '8:'
-      metadataLines: number;   // Lines starting with 'f:', 'e:', or 'd:'
-    };
+    streaming: boolean;
+    contentLength: number;
+    chunkCount: number;
   };
 
   // GitLab information
@@ -671,8 +667,6 @@ export class Agent8Client {
       const parseDuration = Date.now() - parseStartTime;
       console.log(`[Agent8] Task ${taskId} - Parsing completed (${parseDuration}ms)`);
 
-            const stats = UseChatAdapter.extractStats(rawContent);
-
       // Clear rawContent from memory after parsing (memory optimization)
       const rawContentLength = rawContent.length;
       // rawContent is no longer needed in memory, file contains the data
@@ -705,7 +699,6 @@ export class Agent8Client {
         response: {
           ...initialMetadata.response,
           duration: totalDuration,
-          stats,
           streaming: false,
           contentLength: totalBytes,
           chunkCount

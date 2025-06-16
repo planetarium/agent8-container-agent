@@ -1,8 +1,8 @@
 import { Agent8Client } from '../agent8Client.js';
-import { UseChatAdapter } from '../utils/useChatAdapter.js';
 import { AuthManager } from '../../auth/index.js';
 import { parseCookies } from '../../cookieParser.js';
 import type { TaskRequest, TaskResponse } from '../types/api.js';
+import { promises as fs } from 'fs';
 
 export class Agent8ApiRoutes {
   private agent8Client: Agent8Client;
@@ -70,37 +70,75 @@ export class Agent8ApiRoutes {
     return path.startsWith('/api/agent8');
   }
 
+  /**
+   * Real-time raw streaming chat API
+   * POST /api/agent8/chat
+   */
   private async handleChatApi(req: Request, corsHeaders: Record<string, string>): Promise<Response> {
-    const rawContent = await this.agent8Client.loadCurrentRawContent();
-    if (!rawContent) {
-      return new Response(JSON.stringify({ error: 'Task response not found' }), {
+    const currentTaskId = await this.agent8Client.getCurrentTaskId();
+    if (!currentTaskId) {
+      return new Response(JSON.stringify({ error: 'No active task found' }), {
         status: 404,
         headers: corsHeaders
       });
     }
 
-    const { annotations, textContent, metadata } = UseChatAdapter.parseDataStream(rawContent);
+    console.log(`[Agent8API] Starting real-time raw streaming for task: ${currentTaskId}`);
 
     const stream = new ReadableStream({
-      start(controller) {
+      start: async (controller) => {
         const encoder = new TextEncoder();
+        let lastPosition = 0;
+        let isCompleted = false;
 
-        annotations.forEach(annotation => {
-          const data = `data: ${JSON.stringify(annotation)}\n\n`;
-          controller.enqueue(encoder.encode(data));
-        });
+        const streamNewData = async () => {
+          try {
+                                    const rawFilePath = `/.agent8/llm-responses/${currentTaskId}.raw`;
 
-        const message = {
-          id: metadata.messageId || `msg_${Date.now()}`,
-          role: 'assistant',
-          content: textContent,
+            const stats = await fs.stat(rawFilePath);
+            const currentSize = stats.size;
+
+            if (currentSize > lastPosition) {
+              const fileHandle = await fs.open(rawFilePath, 'r');
+              const buffer = Buffer.alloc(currentSize - lastPosition);
+
+              await fileHandle.read(buffer, 0, buffer.length, lastPosition);
+              await fileHandle.close();
+
+              const newContent = buffer.toString('utf8');
+
+              const lines = newContent.split('\n');
+              for (const line of lines) {
+                if (line.trim()) {
+                  controller.enqueue(encoder.encode(`data: ${line}\n\n`));
+                }
+              }
+
+              lastPosition = currentSize;
+            }
+
+            if (!isCompleted) {
+              const metadata = await this.agent8Client.loadCurrentMetadata();
+              if (metadata && metadata.response && !metadata.response.streaming) {
+                isCompleted = true;
+                controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+                controller.close();
+              }
+            }
+          } catch (error: any) {
+            if (error.code !== 'ENOENT' && !isCompleted) {
+              console.error('[Agent8API] Streaming error:', error);
+            }
+          }
         };
 
-        const messageData = `data: ${JSON.stringify(message)}\n\n`;
-        controller.enqueue(encoder.encode(messageData));
+        await streamNewData();
+        const interval = setInterval(streamNewData, 50);
 
-        controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-        controller.close();
+        req.signal?.addEventListener('abort', () => {
+          clearInterval(interval);
+          controller.close();
+        });
       }
     });
 
@@ -130,16 +168,15 @@ export class Agent8ApiRoutes {
     const result = {
       metadata,
       rawContent,
-      parsedData: UseChatAdapter.parseDataStream(rawContent),
       summary: {
         taskId: metadata.taskId,
         timestamp: metadata.timestamp,
         duration: metadata.response?.duration,
-        contentLength: metadata.response?.rawContent?.length,
-        artifactsCount: metadata.processing?.artifactsCount,
-        actionsCount: metadata.processing?.actionsCount,
-        executedActions: metadata.processing?.executedActions,
-        failedActions: metadata.processing?.failedActions
+        contentLength: rawContent.length,
+        artifactsCount: metadata.processing?.artifactsCount || 0,
+        actionsCount: metadata.processing?.actionsCount || 0,
+        executedActions: metadata.processing?.executedActions || 0,
+        failedActions: metadata.processing?.failedActions || 0
       }
     };
 
