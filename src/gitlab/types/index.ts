@@ -142,6 +142,58 @@ export interface IssueChangeEvent {
   timestamp: Date;
 }
 
+export interface GitLabProject {
+  id: number;
+  name: string;
+  path: string;
+  path_with_namespace: string;
+  description: string | null;
+  default_branch: string;
+  visibility: 'private' | 'internal' | 'public';
+  owner?: {
+    id: number;
+    username: string;
+    name: string;
+    email?: string;
+  };
+  namespace: {
+    id: number;
+    name: string;
+    path: string;
+    kind: 'user' | 'group';
+    full_path: string;
+    owner?: {
+      id: number;
+      username: string;
+      name: string;
+      email?: string;
+    };
+  };
+  created_at: string;
+  updated_at: string;
+  http_url_to_repo: string;
+  ssh_url_to_repo: string;
+}
+
+export interface GitLabUser {
+  id: number;
+  username: string;
+  name: string;
+  state: string;
+  avatar_url: string;
+  web_url: string;
+  email?: string;
+  public_email?: string;
+  created_at: string;
+  bio?: string;
+  location?: string;
+  skype?: string;
+  linkedin?: string;
+  twitter?: string;
+  website_url?: string;
+  organization?: string;
+}
+
 // Task Delegation Types
 export * from './taskDelegation.js';
 

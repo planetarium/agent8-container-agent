@@ -11,6 +11,7 @@ export interface GitLabInfo {
   issueTitle: string;
   issueDescription: string | null;
   issueAuthor: string;
+  projectOwner: string;
   containerId: string;
 }
 

@@ -1,4 +1,4 @@
-import { GitLabIssue, TaskDelegationOptions, TaskDelegationResult, TaskStatusResult, ApiResponse } from '../types/index.js';
+import type { GitLabIssue, TaskDelegationOptions, TaskDelegationResult, ApiResponse, GitLabProject, GitLabUser } from '../types/index.js';
 import { GitLabIssueRepository } from '../repositories/gitlabIssueRepository.js';
 import { GitLabClient } from './gitlabClient.js';
 import { getContainerAuthTokenForUser } from '../../container/containerAuthClient.js';
@@ -60,7 +60,8 @@ export class GitLabTaskDelegationService {
           issueUrl: issue.web_url,
           issueTitle: issue.title,
           issueDescription: issue.description,
-          issueAuthor: await this.getUserEmail(issue.author.id, issue.author.username),
+          issueAuthor: await this.gitlabClient!.getUserEmail(issue.author.id, issue.author.username),
+          projectOwner: await this.gitlabClient!.getProjectOwnerEmail(issue.project_id),
           containerId: containerId
         }
       };
@@ -209,13 +210,13 @@ ${artifactList}
 
     console.log(`[GitLab-Agent8] Sending task to container: ${url}`);
 
-    // Extract user email from payload
-    const userEmail = payload.gitlabInfo?.issueAuthor;
+    // Extract project owner email from payload for authentication
+    const userEmail = payload.gitlabInfo?.projectOwner;
     if (!userEmail) {
-      throw new Error('[GitLab-Agent8] User email not found in payload.gitlabInfo.issueAuthor');
+      throw new Error('[GitLab-Agent8] Project owner email not found in payload.gitlabInfo.projectOwner');
     }
 
-    console.log(`[GitLab-Agent8] Using authentication for user: ${userEmail}`);
+    console.log(`[GitLab-Agent8] Using authentication for project owner: ${userEmail}`);
 
     try {
       // Get user-specific authentication token
@@ -276,48 +277,7 @@ ${artifactList}
     }
   }
 
-  /**
-   * Get user email address by user ID (required - throws error if not found)
-   * Requires admin token to access private email addresses
-   */
-  private async getUserEmail(userId: number, username: string): Promise<string> {
-    if (!this.gitlabClient) {
-      throw new Error('[GitLab-Agent8] GitLab client not available for email lookup');
-    }
 
-    try {
-      // Use direct API call to get user details with email
-      const baseUrl = process.env.GITLAB_URL || 'https://gitlab.com';
-      const token = process.env.GITLAB_TOKEN;
 
-      if (!token) {
-        throw new Error('[GitLab-Agent8] GitLab token not available for email lookup');
-      }
 
-      const response = await fetch(`${baseUrl}/api/v4/users/${userId}`, {
-        headers: {
-          'PRIVATE-TOKEN': token
-        }
-      });
-
-      if (!response.ok) {
-        throw new Error(`[GitLab-Agent8] Failed to fetch user details: ${response.status} ${response.statusText}`);
-      }
-
-      const user = await response.json() as { email?: string; public_email?: string };
-
-      // Return email (available for admins) or public_email (available for regular users)
-      const userEmail = user.email || user.public_email;
-
-      if (!userEmail) {
-        throw new Error(`[GitLab-Agent8] Could not retrieve email address for user ${username} (ID: ${userId}). Email is required for container authentication. Please ensure the user has a public email or the GitLab token has admin privileges.`);
-      }
-
-      return userEmail;
-
-    } catch (error) {
-      // Re-throw all errors since email is required
-      throw error;
-    }
-  }
 }
