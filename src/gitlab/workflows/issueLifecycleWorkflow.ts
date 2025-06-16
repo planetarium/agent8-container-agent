@@ -138,6 +138,14 @@ export class IssueLifecycleWorkflow {
     if (previousLifecycleLabel === 'REJECT' && currentLifecycleLabel === 'TODO') {
       console.log(`[Lifecycle] Issue #${issue.iid} restarted from REJECT to TODO`);
       this.retryStates.delete(issue.id);
+
+      // Reset processed_at to created_at to allow reprocessing
+      try {
+        await this.issueRepository.resetProcessedTime(issue.id);
+        console.log(`[Lifecycle] Issue #${issue.iid} processed_at reset for reprocessing`);
+      } catch (error) {
+        console.error(`[Lifecycle] Failed to reset processed_at for issue #${issue.iid}:`, error);
+      }
     }
   }
 

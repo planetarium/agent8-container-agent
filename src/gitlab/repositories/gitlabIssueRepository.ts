@@ -180,4 +180,33 @@ export class GitLabIssueRepository {
   async close(): Promise<void> {
     await this.prisma.$disconnect();
   }
+
+  /**
+   * Reset processed_at to created_at and clear container_id for reprocessing
+   */
+  async resetProcessedTime(gitlabIssueId: number): Promise<void> {
+    try {
+      const issue = await this.prisma.gitlab_issues.findUnique({
+        where: { gitlab_issue_id: gitlabIssueId },
+        select: { created_at: true, container_id: true }
+      });
+
+      if (issue) {
+        await this.prisma.gitlab_issues.update({
+          where: { gitlab_issue_id: gitlabIssueId },
+          data: {
+            processed_at: issue.created_at,
+            container_id: null  // Clear previous container ID
+          }
+        });
+
+        console.log(`[Repository] Reset processed_at to created_at and cleared container_id for issue ${gitlabIssueId}`);
+      } else {
+        console.warn(`[Repository] Issue ${gitlabIssueId} not found for processed_at reset`);
+      }
+    } catch (error) {
+      console.error(`[Repository] Failed to reset processed_at for issue ${gitlabIssueId}:`, error);
+      throw error;
+    }
+  }
 }

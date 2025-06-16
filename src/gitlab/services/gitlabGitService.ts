@@ -59,7 +59,8 @@ export class GitLabGitService {
       console.log(`[GitLab-Git] Using base branch: ${baseBranch}`);
 
       // 5. Create and checkout issue branch from determined base branch
-      const branchName = `issue-${issueIid}`;
+      const timestamp = Date.now();
+      const branchName = `issue-${issueIid}-${timestamp}`;
       await this.createIssueBranch(branchName, baseBranch);
 
       // 6. Configure Git settings
@@ -244,7 +245,7 @@ export class GitLabGitService {
       console.log(`[GitLab-Git] Creating draft merge request for issue #${options.issueIid}`);
 
       const title = this.generateMergeRequestTitle(options.issue, options.issueIid);
-      const description = this.generateMergeRequestDescription(options.issue, options.issueIid);
+      const description = this.generateMergeRequestDescription(options.issue, options.issueIid, options.sourceBranch);
 
       const mergeRequest = await this.gitlabClient.createMergeRequest({
         projectId: options.projectId,
@@ -275,7 +276,7 @@ export class GitLabGitService {
     return `Draft: [Issue #${issueIid}] ${cleanTitle}`;
   }
 
-  private generateMergeRequestDescription(issue: GitLabIssue, issueIid: number): string {
+  private generateMergeRequestDescription(issue: GitLabIssue, issueIid: number, branchName: string): string {
     const issueDescription = issue.description || 'No description provided.';
 
     return `## 🔗 Related Issue
@@ -295,7 +296,7 @@ ${issueDescription}
 
 ## 🤖 Auto-generated Information
 
-- **Branch**: \`issue-${issueIid}\`
+- **Branch**: \`${branchName}\`
 - **Created at**: ${new Date().toISOString()}
 - **Agent8 Container**: Development in progress in work environment
 
