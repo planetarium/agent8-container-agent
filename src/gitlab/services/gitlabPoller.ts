@@ -1,7 +1,7 @@
 import type { MachinePool } from "../../fly/machinePool.js";
 import { GitLabIssueRepository } from "../repositories/gitlabIssueRepository.js";
 import { ContainerTrigger } from "../triggers/containerTrigger.js";
-import type { GitLabConfig } from "../types/index.js";
+import type { GitLabConfig, GitLabIssueRecord } from "../types/index.js";
 import { IssueLifecycleWorkflow } from "../workflows/issueLifecycleWorkflow.js";
 import { GitLabClient } from "./gitlabClient.js";
 import { GitLabContainerService } from "./gitlabContainerService.js";
@@ -66,38 +66,38 @@ export class GitLabPoller {
 
   private async checkForNewIssues(): Promise<void> {
     try {
+      console.info("[GitLab Poller] Starting new issue check and processing...");
+
+      // Fetch and store new issues from GitLab
       const lastCheckTime =
         (await this.issueRepository.getLastCheckTime()) || new Date(Date.now() - 60 * 60 * 1000);
 
       const triggerLabels = process.env.CONTAINER_TRIGGER_LABELS?.split(",");
-
       const recentIssues = await this.gitlabClient.fetchRecentIssues(lastCheckTime, triggerLabels);
 
-      const processedIds = await this.issueRepository.getProcessedIssueIds();
-      const unprocessedIssues = recentIssues.filter((issue) => !processedIds.has(issue.id));
+      if (recentIssues.length > 0) {
+        console.info(`[GitLab Poller] Found ${recentIssues.length} recent issues, storing to DB`);
 
-      let _processedCount = 0;
-      let _containersCreated = 0;
-
-      for (const issue of unprocessedIssues) {
-        try {
-          const containerId = await this.containerTrigger.processIssue(issue);
-
-          if (containerId) {
-            _containersCreated++;
-          } else {
+        for (const issue of recentIssues) {
+          if (this.labelService.getCurrentLifecycleLabel(issue) === "TODO") {
             await this.issueRepository.markIssueProcessed(issue);
           }
-
-          _processedCount++;
-        } catch (error) {
-          console.error(`Error processing issue ${issue.id}:`, error);
         }
       }
 
-      const _stats = await this.issueRepository.getIssueStats();
+      // Select and process issues from DB
+      const processableIssues = await this.selectProcessableIssuesWithLock();
+
+      if (processableIssues.length === 0) {
+        console.info("[GitLab Poller] No TODO issues to process");
+        return;
+      }
+
+      console.info(`[GitLab Poller] Selected ${processableIssues.length} issues for processing`);
+
+      await this.processSelectedIssues(processableIssues);
     } catch (error) {
-      console.error("Error during issue check:", error);
+      console.error("[GitLab Poller] Error during issue check:", error);
     }
   }
 
@@ -182,5 +182,103 @@ export class GitLabPoller {
       isRunning: this.isRunning,
       interval: this.checkInterval,
     };
+  }
+
+  private async selectProcessableIssuesWithLock(): Promise<GitLabIssueRecord[]> {
+    return await this.issueRepository.selectProcessableIssuesWithLock();
+  }
+
+  private async processSelectedIssues(issues: GitLabIssueRecord[]): Promise<void> {
+    let processedCount = 0;
+    let containersCreated = 0;
+    let skippedCount = 0;
+
+    for (const storedIssue of issues) {
+      try {
+        console.info(
+          `[GitLab Poller] Processing project ${storedIssue.project_id} issue #${storedIssue.gitlab_iid} (created: ${storedIssue.created_at.toISOString()})`,
+        );
+
+        const currentBlockingCount = await this.issueRepository.getProjectBlockingCount(
+          storedIssue.project_id,
+        );
+        if (currentBlockingCount > 0) {
+          console.info(
+            `[GitLab Poller] Project ${storedIssue.project_id} now has blocking issues (WIP or CONFIRM NEEDED), reverting selection`,
+          );
+          await this.issueRepository.revertProcessingMark(Number(storedIssue.id));
+          skippedCount++;
+          continue;
+        }
+
+        const currentIssue = await this.gitlabClient.getIssue(
+          storedIssue.project_id,
+          storedIssue.gitlab_iid,
+        );
+
+        const currentLabel = this.labelService.getCurrentLifecycleLabel(currentIssue);
+        if (currentLabel !== "TODO") {
+          console.info(
+            `[GitLab Poller] Issue #${currentIssue.iid} no longer TODO (current: ${currentLabel}), reverting`,
+          );
+          await this.issueRepository.revertProcessingMark(Number(storedIssue.id));
+          skippedCount++;
+          continue;
+        }
+
+        if (!this.labelService.hasTriggerLabel(currentIssue)) {
+          console.info(
+            `[GitLab Poller] Issue #${currentIssue.iid} no longer has trigger label, reverting`,
+          );
+          await this.issueRepository.revertProcessingMark(Number(storedIssue.id));
+          skippedCount++;
+          continue;
+        }
+
+        console.info(
+          `[GitLab Poller] Attempting container creation for issue #${currentIssue.iid}...`,
+        );
+        const containerId = await this.containerTrigger.processIssue(currentIssue);
+
+        if (containerId) {
+          containersCreated++;
+          console.info(
+            `[GitLab Poller] Container ${containerId} created for project ${currentIssue.project_id} issue #${currentIssue.iid}`,
+          );
+        } else {
+          await this.issueRepository.markIssueProcessed(currentIssue);
+          console.info(
+            `[GitLab Poller] Project ${currentIssue.project_id} issue #${currentIssue.iid} processed without container creation`,
+          );
+        }
+
+        processedCount++;
+      } catch (error) {
+        console.error(
+          `[GitLab Poller] Error processing issue ${storedIssue.gitlab_issue_id}:`,
+          error,
+        );
+        await this.issueRepository.revertProcessingMark(Number(storedIssue.id));
+      }
+    }
+
+    const stats = await this.issueRepository.getIssueStats();
+    const projectStats = await this.issueRepository.getProjectIssueStats();
+
+    console.info("[GitLab Poller] Project-based processing completed:");
+    console.info(`  - Issues selected: ${issues.length}`);
+    console.info(`  - Issues processed: ${processedCount}`);
+    console.info(`  - Containers created: ${containersCreated}`);
+    console.info(`  - Issues skipped: ${skippedCount}`);
+    console.info(`  - Total issues in DB: ${stats.total}`);
+
+    if (projectStats.size > 0) {
+      console.info("[GitLab Poller] Project breakdown:");
+      for (const [projectId, counts] of projectStats.entries()) {
+        console.info(
+          `  - Project ${projectId}: TODO=${counts.todo}, WIP=${counts.wip}, CONFIRM_NEEDED=${counts.confirmNeeded}, Others=${counts.others}`,
+        );
+      }
+    }
   }
 }

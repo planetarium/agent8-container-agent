@@ -209,4 +209,172 @@ export class GitLabIssueRepository {
       throw error;
     }
   }
+
+  async getProjectBlockingCount(projectId: number): Promise<number> {
+    const allProjectIssues = await this.prisma.gitlab_issues.findMany({
+      select: { labels: true },
+      where: {
+        project_id: projectId,
+        OR: [
+          { labels: { contains: '"WIP"' } },
+          { labels: { contains: '"CONFIRM NEEDED"' } }
+        ]
+      },
+    });
+
+    let blockingCount = 0;
+    for (const issue of allProjectIssues) {
+      const labels = JSON.parse(issue.labels) as string[];
+      if (labels.includes("WIP") || labels.includes("CONFIRM NEEDED")) {
+        blockingCount++;
+      }
+    }
+
+    return blockingCount;
+  }
+
+  async revertProcessingMark(issueId: number): Promise<void> {
+    const issue = await this.prisma.gitlab_issues.findUnique({
+      where: { id: issueId },
+      select: { created_at: true },
+    });
+
+    if (issue) {
+      await this.prisma.gitlab_issues.update({
+        where: { id: issueId },
+        data: { processed_at: issue.created_at },
+      });
+    }
+  }
+
+  async getProjectIssueStats(): Promise<
+    Map<number, { todo: number; wip: number; confirmNeeded: number; others: number }>
+  > {
+    const allIssues = await this.prisma.gitlab_issues.findMany({
+      select: { project_id: true, labels: true },
+    });
+
+    const projectStats = new Map<number, { todo: number; wip: number; confirmNeeded: number; others: number }>();
+
+    for (const issue of allIssues) {
+      const labels = JSON.parse(issue.labels) as string[];
+      const projectId = issue.project_id;
+
+      if (!projectStats.has(projectId)) {
+        projectStats.set(projectId, { todo: 0, wip: 0, confirmNeeded: 0, others: 0 });
+      }
+
+      const stats = projectStats.get(projectId);
+      if (!stats) {
+        continue;
+      }
+
+      if (labels.includes("TODO")) {
+        stats.todo++;
+      } else if (labels.includes("WIP")) {
+        stats.wip++;
+      } else if (labels.includes("CONFIRM NEEDED")) {
+        stats.confirmNeeded++;
+      } else {
+        stats.others++;
+      }
+    }
+
+    return projectStats;
+  }
+
+    async selectProcessableIssuesWithLock(): Promise<GitLabIssueRecord[]> {
+    return await this.prisma.$transaction(
+      async (tx) => {
+        await tx.$executeRaw`SET LOCAL statement_timeout = '10s'`;
+
+        // Step 1: Lock ALL relevant issues first (TODO + WIP + CONFIRM NEEDED)
+        const allRelevantIssues = await tx.$queryRaw<
+          Array<{
+            id: bigint;
+            gitlab_issue_id: number;
+            gitlab_iid: number;
+            project_id: number;
+            title: string;
+            description: string | null;
+            labels: string;
+            author_username: string;
+            web_url: string;
+            created_at: Date;
+            processed_at: Date;
+            container_id: string | null;
+          }>
+        >`
+        SELECT
+          id, gitlab_issue_id, gitlab_iid, project_id, title, description,
+          labels, author_username, web_url, created_at, processed_at, container_id
+        FROM gitlab_issues
+        WHERE labels::jsonb ? 'TODO' OR labels::jsonb ? 'WIP' OR labels::jsonb ? 'CONFIRM NEEDED'
+        ORDER BY project_id ASC, created_at ASC
+        FOR UPDATE NOWAIT
+      `;
+
+        // Step 2: Analyze in memory to find processable issues
+        const projectStats = new Map<number, { blockingCount: number; todoIssues: typeof allRelevantIssues }>();
+
+        // Group issues by project and count blocking issues (WIP + CONFIRM NEEDED)
+        for (const issue of allRelevantIssues) {
+          const labels = JSON.parse(issue.labels) as string[];
+          const projectId = issue.project_id;
+
+          if (!projectStats.has(projectId)) {
+            projectStats.set(projectId, { blockingCount: 0, todoIssues: [] });
+          }
+
+          const stats = projectStats.get(projectId)!;
+
+          if (labels.includes("WIP") || labels.includes("CONFIRM NEEDED")) {
+            stats.blockingCount++;
+          } else if (labels.includes("TODO")) {
+            stats.todoIssues.push(issue);
+          }
+        }
+
+        // Step 3: Select oldest TODO from projects with no blocking issues
+        const processableIssues: typeof allRelevantIssues = [];
+
+        for (const [, stats] of projectStats.entries()) {
+          if (stats.blockingCount === 0 && stats.todoIssues.length > 0) {
+            // Sort by created_at and take the oldest
+            stats.todoIssues.sort((a, b) => a.created_at.getTime() - b.created_at.getTime());
+            processableIssues.push(stats.todoIssues[0]);
+          }
+        }
+
+        // Step 4: Update selected issues
+        if (processableIssues.length > 0) {
+          const issueIds = processableIssues.map((issue) => issue.id);
+          await tx.$executeRaw`
+          UPDATE gitlab_issues
+          SET processed_at = NOW()
+          WHERE id = ANY(${issueIds})
+        `;
+        }
+
+        return processableIssues.map((issue) => ({
+          id: issue.id,
+          gitlab_issue_id: issue.gitlab_issue_id,
+          gitlab_iid: issue.gitlab_iid,
+          project_id: issue.project_id,
+          title: issue.title,
+          description: issue.description,
+          labels: issue.labels,
+          author_username: issue.author_username,
+          web_url: issue.web_url,
+          created_at: issue.created_at,
+          processed_at: issue.processed_at,
+          container_id: issue.container_id,
+        }));
+      },
+      {
+        timeout: 15000,
+        isolationLevel: "ReadCommitted",
+      },
+    );
+  }
 }
