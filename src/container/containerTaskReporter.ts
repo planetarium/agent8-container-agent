@@ -318,7 +318,7 @@ ${artifactList}`;
 }
 
 /**
- * Express endpoint handler for /api/background-task
+ * Express endpoint handler for /api/agent8/task
  */
 export function createTaskEndpoint() {
   const reporter = new ContainerTaskReporter();

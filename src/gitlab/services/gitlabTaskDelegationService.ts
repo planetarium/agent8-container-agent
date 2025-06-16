@@ -205,7 +205,7 @@ ${artifactList}
    * Send task to container via HTTP API
    */
   private async sendTaskToContainer(containerUrl: string, payload: TaskPayload): Promise<ApiResponse> {
-    const url = `${containerUrl}/api/background-task`;
+    const url = `${containerUrl}/api/agent8/task`;
 
     console.log(`[GitLab-Agent8] Sending task to container: ${url}`);
 

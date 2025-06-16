@@ -6,7 +6,7 @@
 
 import type { GitLabInfo } from '../../gitlab/types/api.js';
 
-export interface BackgroundTaskRequest {
+export interface TaskRequest {
   targetServerUrl: string;
   messages: any[];
   apiKeys?: Record<string, string>;
@@ -17,7 +17,7 @@ export interface BackgroundTaskRequest {
   gitlabInfo?: GitLabInfo;
 }
 
-export interface BackgroundTaskResponse {
+export interface TaskResponse {
   success: boolean;
   taskId?: string;
   message?: string;

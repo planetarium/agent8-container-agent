@@ -26,7 +26,6 @@ import type {
 } from "../protocol/src/index.ts";
 import { Agent8Client } from "./agent8";
 import { AuthManager } from "./auth";
-import { parseCookies } from "./cookieParser";
 import { type FlyClient, initializeFlyClient } from "./fly";
 import { MachinePool } from "./fly/machinePool";
 import type { CandidatePort } from "./portScanner";
@@ -34,7 +33,6 @@ import { PortScanner } from "./portScanner/portScanner";
 import type { DirectConnectionData, ProxyData } from "./types";
 import { GitLabApiRoutes } from "./gitlab/api/gitlabApiRoutes.js";
 import { Agent8ApiRoutes } from "./agent8/api/agent8ApiRoutes.js";
-import type { BackgroundTaskRequest, BackgroundTaskResponse } from "./agent8/types/api.js";
 
 type WebSocketData = ProxyData | DirectConnectionData;
 
@@ -157,7 +155,7 @@ export class ContainerServer {
     this.gitlabApiRoutes = new GitLabApiRoutes();
 
     // Initialize Agent8 API routes
-    this.agent8ApiRoutes = new Agent8ApiRoutes(this.agent8Client);
+    this.agent8ApiRoutes = new Agent8ApiRoutes(this.agent8Client, this.authManager);
 
     this.portScanner = new PortScanner({
       scanIntervalMs: 2000,
@@ -355,110 +353,7 @@ export class ContainerServer {
             });
           }),
         },
-        "/api/background-task": {
-          POST: corsMiddleware(async (req: Request) => {
-            const token = this.authManager.extractTokenFromHeader(req.headers.get("authorization"));
-            if (!token) {
-              return Response.json({ error: "Missing authorization token" }, { status: 401 });
-            }
 
-            const userInfo = await this.authManager.verifyToken(token);
-            if (!userInfo) {
-              return Response.json({ error: "Invalid authorization token" }, { status: 401 });
-            }
-
-            try {
-              const body = await req.json() as BackgroundTaskRequest;
-
-              // Validate required fields
-              if (!body.targetServerUrl) {
-                return Response.json({ error: "targetServerUrl is required" }, { status: 400 });
-              }
-              if (!(body.messages && Array.isArray(body.messages)) || body.messages.length === 0) {
-                return Response.json(
-                  { error: "messages array is required and cannot be empty" },
-                  { status: 400 },
-                );
-              }
-
-              // Extract cookies from request headers and merge with body apiKeys
-              const cookieHeader = req.headers.get("cookie");
-              let cookieApiKeys = {};
-
-              if (cookieHeader) {
-                try {
-                  const cookies = parseCookies(cookieHeader);
-                  cookieApiKeys = JSON.parse(cookies.apiKeys || "{}");
-                } catch (error) {
-                  console.warn("Failed to parse apiKeys from cookies:", error);
-                }
-              }
-
-              // Merge cookie apiKeys with body apiKeys (body takes precedence)
-              const finalApiKeys = { ...cookieApiKeys, ...(body.apiKeys || {}) };
-
-              const taskId = await this.agent8Client.createTask({
-                userId: userInfo.userUid,
-                token: token,
-                targetServerUrl: body.targetServerUrl,
-                id: body.id || `req-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
-                messages: body.messages,
-                apiKeys: finalApiKeys,
-                files: body.files || {},
-                promptId: body.promptId || "agent8",
-                contextOptimization: body.contextOptimization ?? true,
-                cookies: cookieHeader || undefined,
-                gitlabInfo: body.gitlabInfo,
-              });
-
-              return Response.json({
-                success: true,
-                taskId: taskId,
-                message: "Background task created successfully",
-              });
-            } catch (error) {
-              console.error("Background task creation failed:", error);
-              return Response.json(
-                {
-                  error:
-                    error instanceof Error ? error.message : "Failed to create background task",
-                },
-                { status: 500 },
-              );
-            }
-          }),
-          OPTIONS: corsMiddleware((_req: Request) => {
-            return new Response(null, { status: 204 });
-          }),
-        },
-        "/api/background-task/:taskId": {
-          GET: corsMiddleware(async (req: Request) => {
-            const token = this.authManager.extractTokenFromHeader(req.headers.get("authorization"));
-            if (!token) {
-              return Response.json({ error: "Missing authorization token" }, { status: 401 });
-            }
-
-            const userInfo = await this.authManager.verifyToken(token);
-            if (!userInfo) {
-              return Response.json({ error: "Invalid authorization token" }, { status: 401 });
-            }
-
-            const taskId = (req as any).params.taskId;
-            const taskStatus = await this.agent8Client.getTaskStatus(
-              taskId,
-              userInfo.userUid,
-            );
-
-            if (!taskStatus) {
-              return Response.json({ error: "Task not found" }, { status: 404 });
-            }
-
-            return Response.json({ success: true, task: taskStatus });
-          }),
-          OPTIONS: corsMiddleware((_req: Request) => {
-            return new Response(null, { status: 204 });
-          }),
-        },
       },
       fetch: corsMiddleware(async (req, server) => {
         // Try GitLab API routes first

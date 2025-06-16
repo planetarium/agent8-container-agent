@@ -260,7 +260,7 @@ ${containerId ? `**Manual Access**: [View Container](${containerUrl})` : ''}
 
   private async configureContainerForGitLab(containerId: string, issue: GitLabIssue): Promise<void> {
     // Container configuration is now handled via HTTP API task delegation
-    // GitLab information is passed directly through the /api/background-task endpoint
+          // GitLab information is passed directly through the /api/agent8/task endpoint
     console.log(`[GitLab-Container] Container ${containerId} configured for GitLab issue #${issue.iid}`);
     console.log(`[GitLab-Container] GitLab info will be passed via HTTP API during task delegation`);
 
