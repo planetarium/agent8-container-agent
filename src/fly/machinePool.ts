@@ -3,7 +3,7 @@
 
 import { FlyClient } from './client';
 import { PrismaClient } from '@prisma/client';
-import type { machine_pool, Prisma } from '@prisma/client';
+import type { machine_pool } from '@prisma/client';
 
 const prisma = new PrismaClient();
 

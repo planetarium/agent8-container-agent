@@ -13,14 +13,22 @@
       "@/*": ["src/*"]
     },
     "typeRoots": [
-      "./node_modules/@types"
+      "./types",
+      "./node_modules/@types",
+      "./node_modules/bun-types"
+    ],
+    "types": [
+      "node",
+      "bun-types"
     ]
   },
+  "files": [
+    "types.d.ts"
+  ],
   "include": [
     "src/**/*",
     "index.ts",
-    "preview.ts",
-    "types.d.ts"
+    "preview.ts"
   ],
   "exclude": [
     "node_modules"

@@ -1,5 +1,6 @@
 /// <reference types="node" />
 /// <reference types="bun-types" />
+/// <reference types="dotenv" />
 
 declare global {
   namespace NodeJS {
@@ -22,39 +23,13 @@ declare global {
   }
 }
 
-declare module '@prisma/client' {
-  import { PrismaClient as BasePrismaClient } from '@prisma/client/runtime/library';
-
-  export interface PrismaClient extends BasePrismaClient {
-    machine_pool: {
-      findMany: <T extends { select?: { machine_id: true } }>(args: {
-        where?: { deleted?: boolean };
-        select?: T['select'];
-      }) => Promise<Array<T['select'] extends { machine_id: true } ? { machine_id: string } : never>>;
-      updateMany: (args: {
-        where: { machine_id: { in: string[] } };
-        data: { deleted: boolean };
-      }) => Promise<{ count: number }>;
-      createMany: (args: {
-        data: Array<{
-          machine_id: string;
-          ipv6: string;
-          deleted: boolean;
-          is_available: boolean;
-          created_at: Date;
-        }>;
-        skipDuplicates?: boolean;
-      }) => Promise<{ count: number }>;
-      count: (args: {
-        where: {
-          is_available: boolean;
-          deleted: boolean;
-          assigned_to: null;
-        };
-      }) => Promise<number>;
-    };
+declare module '@prisma/client/runtime/library' {
+  export interface PrismaClient {
+    $transaction<T>(fn: (prisma: PrismaClient) => Promise<T>): Promise<T>;
   }
+}
 
+declare module '@prisma/client' {
   export interface machine_pool {
     id: bigint;
     created_at: Date;
