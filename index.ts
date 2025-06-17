@@ -17,6 +17,7 @@ function main() {
     appName: process.env.FLY_APP_NAME || "",
     machineId: process.env.FLY_MACHINE_ID || "",
     processGroup: process.env.FLY_PROCESS_GROUP || "app",
+    agentUid: 2000,
   };
 
   console.info("container agent started with " + config.processGroup + " mode");
