@@ -1,5 +1,5 @@
 import process from "node:process";
-import { ContainerServer } from "@/server";
+import { ContainerServer } from "./src/server";
 import dotenv from "dotenv";
 import { MachinePool } from "./src/fly/machinePool";
 import { FlyClient } from "./src/fly";
@@ -7,8 +7,19 @@ import { FlyClient } from "./src/fly";
 // Load environment variables from .env file
 dotenv.config();
 
+interface ContainerConfig {
+  port: number;
+  workdirName: string;
+  coep: string;
+  forwardPreviewErrors: boolean;
+  routerDomain: string;
+  appName: string;
+  machineId: string;
+  processGroup: string;
+}
+
 function main() {
-  const config = {
+  const config: ContainerConfig = {
     port: Number.parseInt(process.env.PORT || "30000", 10),
     workdirName: process.env.WORKDIR_NAME || "/workspace",
     coep: process.env.COEP || "credentialless",

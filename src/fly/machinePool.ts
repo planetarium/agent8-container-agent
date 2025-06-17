@@ -3,6 +3,18 @@ import { PrismaClient, Prisma } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
+interface FlyMachine {
+  id: string;
+  private_ip?: string;
+  created_at?: string;
+  state?: string;
+  region?: string;
+  instance_id?: string;
+  version?: string;
+  image_ref?: string;
+  image?: string;
+}
+
 export class MachinePool {
   private readonly flyClient: FlyClient;
   private readonly defaultPoolSize: number;
@@ -50,7 +62,7 @@ export class MachinePool {
     try {
       // 1. 실제 머신 상태 조회 (Fly API)
       const flyMachines = await this.flyClient.listFlyMachines();
-      const flyMachineIds = new Set(flyMachines.map((m: any) => m.id));
+      const flyMachineIds = new Set(flyMachines.map((m: FlyMachine) => m.id));
 
       // 2. DB 상태 조회 및 동기화 (트랜잭션 범위 축소)
       await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
@@ -70,10 +82,10 @@ export class MachinePool {
           });
         }
         // 4. 실제로는 있는데 DB에 없는 머신 → DB에 추가
-        const machinesToAdd = flyMachines.filter((m: { id: string }) => !dbMachineIds.has(m.id));
+        const machinesToAdd = flyMachines.filter((m: FlyMachine) => !dbMachineIds.has(m.id));
         if (machinesToAdd.length > 0) {
           await tx.machine_pool.createMany({
-            data: machinesToAdd.map((m: { id: string; private_ip?: string; created_at?: string }) => ({
+            data: machinesToAdd.map((m: FlyMachine) => ({
               machine_id: m.id,
               ipv6: m.private_ip || '',
               deleted: false,
@@ -169,12 +181,12 @@ export class MachinePool {
 
       // Fly API에 병렬로 머신 생성 요청
       const machines = await Promise.all(optionsList.map(opt => this.flyClient.createMachine(opt, 0)));
-      const validMachines = machines.filter(m => m && m.id);
+      const validMachines = machines.filter((m): m is FlyMachine => m && m.id);
       if (validMachines.length > 0) {
         // DB에 한꺼번에 저장 (항상 트랜잭션 사용)
         await prisma.$transaction(async (tx) => {
           await tx.machine_pool.createMany({
-            data: validMachines.map((m: any) => ({
+            data: validMachines.map((m: FlyMachine) => ({
               machine_id: m.id,
               ipv6: m.private_ip || '',
               deleted: false,
