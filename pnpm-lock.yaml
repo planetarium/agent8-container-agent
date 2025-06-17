@@ -40,7 +40,7 @@ importers:
         specifier: ^20.19.1
         version: 20.19.1
       bun-types:
-        specifier: ^1.2.10
+        specifier: ^1.2.16
         version: 1.2.16
 
   protocol:

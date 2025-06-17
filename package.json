@@ -24,6 +24,6 @@
     "@biomejs/biome": "1.9.4",
     "@types/dotenv": "^8.2.3",
     "@types/node": "^20.19.1",
-    "bun-types": "^1.2.10"
+    "bun-types": "^1.2.16"
   }
 }

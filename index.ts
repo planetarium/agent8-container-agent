@@ -1,9 +1,10 @@
 /// <reference types="node" />
+/// <reference types="bun-types" />
 
 import process from "node:process";
 import { ContainerServer } from "./src/server";
 import { config as dotenvConfig } from "dotenv";
-import { MachinePool } from "./src/fly/machinePool";
+import { MachinePoolManager } from "./src/fly/machinePool";
 import { FlyClient } from "./src/fly";
 
 // Load environment variables from .env file
@@ -41,7 +42,7 @@ function main() {
       imageRef: process.env.FLY_IMAGE_REF
     });
 
-    const machinePool = new MachinePool(flyClient, {
+    const machinePool = new MachinePoolManager(flyClient, {
       defaultPoolSize: parseInt(process.env.DEFAULT_POOL_SIZE || '20'),
       checkInterval: parseInt(process.env.CHECK_INTERVAL || '60000')
     });

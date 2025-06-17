@@ -1,7 +1,9 @@
 /// <reference types="node" />
+/// <reference types="bun-types" />
 
 import { FlyClient } from './client';
-import { PrismaClient, Prisma } from '@prisma/client';
+import { PrismaClient } from '@prisma/client';
+import type { machine_pool as MachinePoolModel } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
@@ -17,14 +19,14 @@ interface FlyMachine {
   image?: string;
 }
 
-type MachinePoolRecord = Prisma.machine_poolGetPayload<{}>;
-type TransactionCallback<T> = (tx: Prisma.TransactionClient) => Promise<T>;
+type MachinePoolRecord = MachinePoolModel;
+type TransactionCallback<T> = (tx: PrismaClient) => Promise<T>;
 
 function isFlyMachine(obj: unknown): obj is FlyMachine {
   return typeof obj === 'object' && obj !== null && 'id' in obj;
 }
 
-export class MachinePool {
+export class MachinePoolManager {
   private readonly flyClient: FlyClient;
   private readonly defaultPoolSize: number;
   private readonly checkInterval: number;
@@ -255,7 +257,7 @@ export class MachinePool {
    */
   async getMachine(userId: string): Promise<string | null> {
     try {
-      return await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      return await prisma.$transaction(async (tx) => {
         // Get and update an available machine atomically
         const result = await tx.$queryRaw`
           UPDATE machine_pool
@@ -292,7 +294,7 @@ export class MachinePool {
    */
   async getMachineAssignment(machineId: string): Promise<{ assigned_to: string | null; assigned_at: Date | null } | null> {
     try {
-      return await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      return await prisma.$transaction(async (tx) => {
         const machine = await tx.machine_pool.findFirst({
           where: { machine_id: machineId },
           select: { assigned_to: true, assigned_at: true }
@@ -331,7 +333,7 @@ export class MachinePool {
     is_available: boolean;
     created_at: Date;
   }[]> {
-    return await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    return await prisma.$transaction(async (tx) => {
       return await tx.machine_pool.findMany({
         where: { deleted: false },
       });
@@ -350,7 +352,7 @@ export class MachinePool {
     is_available: boolean;
     created_at: Date;
   } | null> {
-    return await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    return await prisma.$transaction(async (tx) => {
       return await tx.machine_pool.findFirst({
         where: { machine_id: machineId, deleted: false },
       });
@@ -364,7 +366,7 @@ export class MachinePool {
    */
   async getMachineIp(machineId: string): Promise<string | null> {
     try {
-      return await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      return await prisma.$transaction(async (tx) => {
         const machine = await tx.machine_pool.findFirst({
           where: { machine_id: machineId },
           select: { ipv6: true }
