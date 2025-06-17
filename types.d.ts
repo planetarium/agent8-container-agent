@@ -23,7 +23,11 @@ declare global {
 }
 
 declare module '@prisma/client' {
-  interface machine_pool {
+  export interface PrismaClient {
+    $transaction<T>(fn: (prisma: PrismaClient) => Promise<T>): Promise<T>;
+  }
+
+  export interface machine_pool {
     id: bigint;
     created_at: Date;
     machine_id: string;
@@ -49,3 +53,5 @@ declare module 'dotenv' {
 
   export function config(options?: DotenvConfigOptions): DotenvConfigOutput;
 }
+
+export {};

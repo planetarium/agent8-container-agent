@@ -2,10 +2,9 @@
 /// <reference types="bun-types" />
 
 import { FlyClient } from './client';
-import { PrismaClient } from '@prisma/client';
-import type { machine_pool } from '@prisma/client';
+import { PrismaClient as BasePrismaClient, type machine_pool } from '@prisma/client';
 
-const prisma = new PrismaClient();
+const prisma = new BasePrismaClient();
 
 interface FlyMachine {
   id: string;
@@ -20,7 +19,7 @@ interface FlyMachine {
 }
 
 type MachinePoolRecord = machine_pool;
-type TransactionCallback<T> = (tx: PrismaClient) => Promise<T>;
+type TransactionCallback<T> = (tx: BasePrismaClient) => Promise<T>;
 
 function isFlyMachine(obj: unknown): obj is FlyMachine {
   return typeof obj === 'object' && obj !== null && 'id' in obj;
@@ -74,7 +73,7 @@ export class MachinePoolManager {
       const flyMachines = await this.flyClient.listFlyMachines();
       const flyMachineIds = new Set(flyMachines.filter(isFlyMachine).map(m => m.id));
 
-      const callback: TransactionCallback<MachinePoolRecord[]> = async (tx: PrismaClient) => {
+      const callback: TransactionCallback<MachinePoolRecord[]> = async (tx: BasePrismaClient) => {
         const machines = await tx.machine_pool.findMany({
           where: { deleted: false },
           select: { machine_id: true }
