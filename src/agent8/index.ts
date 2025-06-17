@@ -34,6 +34,10 @@ export { ActionRunner } from "./runner/actionRunner.ts";
 // Export client classes
 export { Agent8Client } from "./agent8Client.ts";
 
+// Export MCP classes
+export { McpConfigurationManager } from "./mcpConfigurationManager.js";
+export { ConfigurationFormatter } from "./configurationFormatter.js";
+
 // Export utility functions
 export {
   cleanoutFileContent,

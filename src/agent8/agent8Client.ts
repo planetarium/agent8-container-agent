@@ -25,6 +25,7 @@ import { ActionRunner, StreamingMessageParser } from "./index.ts";
 import type { FileMap } from "./types/fileMap.js";
 import { FileMapBuilder } from "./utils/fileMapBuilder.js";
 import { convertToUIMessages } from "./utils/messageUtils.js";
+import { ConfigurationFormatter } from "./configurationFormatter.js";
 
 interface TaskResponseData {
   taskId: string;
@@ -76,6 +77,7 @@ interface ChatRequest {
   promptId?: string;
   contextOptimization: boolean;
   gitlabInfo: GitLabInfo;
+  mcpConfig?: string;
 }
 
 interface Task {
@@ -100,8 +102,10 @@ export class Agent8Client {
   private currentGitLabInfo: GitLabInfo | null = null;
   private previousIssueState: IssueState | null = null;
   private readonly POLLING_INTERVAL = 30000; // 30 seconds
+  private containerServer: ContainerServer;
 
   constructor(containerServer: ContainerServer, workdir: string) {
+    this.containerServer = containerServer;
     // Validate GitLab configuration
     if (!(process.env.GITLAB_URL && process.env.GITLAB_TOKEN)) {
       throw new Error(
@@ -169,6 +173,12 @@ export class Agent8Client {
     }
     const files = await this.buildFileMapFromWorkdir();
 
+    // Set MCP configuration if provided
+    if (request.mcpConfig) {
+      this.setContainerMcpConfiguration(request.mcpConfig);
+      console.log(`[MCP] Task ${taskId} configured with MCP servers`);
+    }
+
     const chatRequest: ChatRequest = {
       userId: request.userId,
       token: request.token,
@@ -179,6 +189,7 @@ export class Agent8Client {
       promptId: request.promptId,
       contextOptimization: request.contextOptimization,
       gitlabInfo: request.gitlabInfo,
+      mcpConfig: request.mcpConfig,
     };
 
     const task: Task = {
@@ -241,53 +252,20 @@ export class Agent8Client {
   ): Promise<{ response: Response; requestData: any }> {
     const startTime = Date.now();
 
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-      "User-Agent": "Agent8-Container/1.0",
-    };
+    // Log MCP integration status
+    this.logMcpIntegrationStatus(request);
 
-    let cookieString = "";
+    const headers = this.buildHeaders(request);
 
-    if (request.cookies) {
-      cookieString = request.cookies;
-    }
-
-    // Use provided token for backward compatibility with external services
-    if (request.token) {
-      const tokenCookie = `v8AccessToken=${request.token}`;
-      if (cookieString) {
-        cookieString += `; ${tokenCookie}`;
-      } else {
-        cookieString = tokenCookie;
-      }
-    }
-
-    if (cookieString) {
-      headers.Cookie = cookieString;
-    }
-
-    const payload = {
-      messages: request.messages,
-      files: request.files,
-      ...(request.promptId && { promptId: request.promptId }),
-      ...(request.contextOptimization !== undefined && {
-        contextOptimization: request.contextOptimization,
-      }),
-    };
+    const payload = this.buildLLMPayload(request);
 
     const payloadString = JSON.stringify(payload);
-
-    // Use the token provided in the request for authentication
-    const authHeaders = {
-      ...headers,
-      Authorization: `Bearer ${request.token}`,
-    };
 
     // Capture request data for response storage
     const requestData = {
       url: request.targetServerUrl,
       method: "POST",
-      headers: authHeaders,
+      headers: headers,
       payload: payloadString,
       sentAt: new Date().toISOString(),
     };
@@ -295,7 +273,7 @@ export class Agent8Client {
     try {
       const response = await fetch(request.targetServerUrl, {
         method: "POST",
-        headers: authHeaders,
+        headers: headers,
         body: payloadString,
         signal: AbortSignal.timeout(10 * 60 * 1000),
       });
@@ -1239,6 +1217,115 @@ export class Agent8Client {
     } catch (error) {
       console.error(`[Agent8] Failed to load metadata for task ${taskId}:`, error);
       return null;
+    }
+  }
+
+  /**
+   * Set MCP configuration on container server
+   */
+  private setContainerMcpConfiguration(mcpConfig: string): void {
+    try {
+      if (this.containerServer && typeof this.containerServer.setMcpConfiguration === 'function') {
+        this.containerServer.setMcpConfiguration(mcpConfig);
+        console.log('[MCP] Container MCP configuration set successfully');
+      } else {
+        console.warn('[MCP] Container server does not support MCP configuration');
+      }
+    } catch (error) {
+      console.error('[MCP] Failed to set container MCP configuration:', error);
+    }
+  }
+
+  /**
+   * Build HTTP headers for LLM server requests with MCP configuration
+   */
+  private buildHeaders(request: ChatRequest): Record<string, string> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'User-Agent': 'Agent8-Container/1.0',
+      'Authorization': `Bearer ${request.token}`,
+    };
+
+    let cookieString = "";
+
+    // Add existing cookies
+    if (request.cookies) {
+      cookieString = request.cookies;
+    }
+
+    // Add token cookie for backward compatibility
+    if (request.token) {
+      const tokenCookie = `v8AccessToken=${request.token}`;
+      if (cookieString) {
+        cookieString += `; ${tokenCookie}`;
+      } else {
+        cookieString = tokenCookie;
+      }
+    }
+
+    // Add MCP configuration to cookies if available
+    if (request.mcpConfig) {
+      const mcpCookie = request.mcpConfig;
+      if (cookieString) {
+        cookieString += `; ${mcpCookie}`;
+      } else {
+        cookieString = mcpCookie;
+      }
+      console.log('[MCP] Adding MCP configuration to LLM server request');
+    }
+
+    // Set final cookie header
+    if (cookieString) {
+      headers.Cookie = cookieString;
+    }
+
+    return headers;
+  }
+
+  /**
+   * Enhanced LLM server payload construction with MCP context
+   */
+  private buildLLMPayload(request: ChatRequest): any {
+    const payload: any = {
+      messages: request.messages,
+      files: request.files,
+      ...(request.promptId && { promptId: request.promptId }),
+      ...(request.contextOptimization !== undefined && {
+        contextOptimization: request.contextOptimization,
+      }),
+    };
+
+    // Add MCP server information to payload for LLM server awareness
+    if (request.mcpConfig) {
+      const mcpData = ConfigurationFormatter.parseMcpConfiguration(request.mcpConfig);
+      if (mcpData && mcpData.servers.length > 0) {
+        payload.mcpContext = {
+          availableServers: mcpData.servers.map((server: any) => server.name),
+          serverCount: mcpData.servers.length,
+          enabledServers: mcpData.servers.filter((s: any) => s.enabled).length,
+        };
+      }
+    }
+
+    return payload;
+  }
+
+  /**
+   * MCP integration diagnostics
+   */
+  private logMcpIntegrationStatus(request: ChatRequest): void {
+    if (request.mcpConfig) {
+      const mcpData = ConfigurationFormatter.parseMcpConfiguration(request.mcpConfig);
+      if (mcpData) {
+        console.log(`[MCP-Integration] Found ${mcpData.servers.length} MCP servers for task`);
+        mcpData.servers.forEach((server: any) => {
+          console.log(`[MCP-Integration] Server: ${server.name} (${server.url}) - ${server.enabled ? 'Enabled' : 'Disabled'}`);
+        });
+      } else {
+        console.warn('[MCP-Integration] Failed to parse MCP configuration');
+      }
+    } else {
+      console.log('[MCP-Integration] No MCP configuration available for this task');
     }
   }
 }

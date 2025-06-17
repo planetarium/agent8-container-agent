@@ -7,6 +7,8 @@ import { IssueLifecycleWorkflow } from "../workflows/issueLifecycleWorkflow.js";
 import type { GitLabClient } from "./gitlabClient.js";
 import { GitLabLabelService } from "./gitlabLabelService.js";
 import { GitLabTaskDelegationService } from "./gitlabTaskDelegationService.js";
+import { McpConfigurationService } from "./mcpConfigurationService.js";
+import { McpConfigurationManager } from "../../agent8/mcpConfigurationManager.js";
 
 export class GitLabContainerService {
   private machinePool: MachinePool;
@@ -28,12 +30,26 @@ export class GitLabContainerService {
     this.gitlabClient = gitlabClient;
     this.routerDomain = routerDomain;
 
-    // Initialize GitLabTaskDelegationService
+    // Initialize MCP Configuration Manager if GitLab client is available
+    let mcpConfigManager: McpConfigurationManager | undefined;
+    if (gitlabClient) {
+      console.log(`[GitLab-Container] Initializing MCP Configuration Manager...`);
+      const mcpConfigService = new McpConfigurationService(gitlabClient);
+      mcpConfigManager = new McpConfigurationManager(mcpConfigService);
+      console.log(`[GitLab-Container] ✅ MCP Configuration Manager initialized`);
+    } else {
+      console.log(`[GitLab-Container] ⚠️ No GitLab client provided - MCP configuration will not be available`);
+    }
+
+    // Initialize GitLabTaskDelegationService with MCP Configuration Manager
     this.taskDelegationService = new GitLabTaskDelegationService(
       issueRepository,
       gitlabClient,
       routerDomain,
+      mcpConfigManager,
     );
+
+    console.log(`[GitLab-Container] TaskDelegationService initialized with MCP support: ${!!mcpConfigManager}`);
 
     // Initialize lifecycle management services if GitLab client is available
     if (gitlabClient) {

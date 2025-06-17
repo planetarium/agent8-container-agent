@@ -1,5 +1,6 @@
 import { getContainerAuthTokenForUser } from "../../container/containerAuthClient.js";
 import type { TaskPayload } from "../../container/containerTaskReporter.js";
+import type { McpConfigurationManager } from "../../agent8/mcpConfigurationManager.js";
 import type { GitLabIssueRepository } from "../repositories/gitlabIssueRepository.js";
 import type {
   ApiResponse,
@@ -13,15 +14,18 @@ export class GitLabTaskDelegationService {
   private issueRepository: GitLabIssueRepository;
   private gitlabClient?: GitLabClient;
   private routerDomain: string;
+  private mcpConfigManager?: McpConfigurationManager;
 
   constructor(
     issueRepository: GitLabIssueRepository,
     gitlabClient?: GitLabClient,
     routerDomain: string = process.env.FLY_ROUTER_DOMAIN || "agent8.verse8.net",
+    mcpConfigManager?: McpConfigurationManager,
   ) {
     this.issueRepository = issueRepository;
     this.gitlabClient = gitlabClient;
     this.routerDomain = routerDomain;
+    this.mcpConfigManager = mcpConfigManager;
   }
 
   /**
@@ -46,6 +50,29 @@ export class GitLabTaskDelegationService {
       // Step 2: Build container URL
       const containerUrl = options.containerUrl || this.buildContainerUrl(containerId);
 
+      // Step 2.5: Get MCP configuration for this issue
+      console.log(`[MCP-Integration] Starting MCP configuration retrieval for project ${issue.project_id}, issue #${issue.iid}`);
+
+      const mcpConfig = this.mcpConfigManager
+        ? await this.mcpConfigManager.prepareMcpConfigurationForIssue(
+            issue.project_id,
+            issue.iid
+          )
+        : null;
+
+      if (mcpConfig) {
+        console.log(`[MCP-Integration] ✅ Found MCP configuration for issue #${issue.iid}`);
+        console.log(`[MCP-Integration] MCP config length: ${mcpConfig.length} characters`);
+        console.log(`[MCP-Integration] MCP config preview: ${mcpConfig.substring(0, 200)}...`);
+      } else {
+        console.log(`[MCP-Integration] ❌ No MCP configuration available for this task`);
+        console.log(`[MCP-Integration] MCP Config Manager available: ${!!this.mcpConfigManager}`);
+
+        if (this.mcpConfigManager) {
+          console.log(`[MCP-Integration] MCP Config Manager exists but returned null - this indicates no MCP metadata found`);
+        }
+      }
+
       // Step 3: Prepare task payload with GitLab info for autonomous reporting
       const payload: TaskPayload = {
         targetServerUrl: options.targetServerUrl,
@@ -61,13 +88,15 @@ export class GitLabTaskDelegationService {
           issueUrl: issue.web_url,
           issueTitle: issue.title,
           issueDescription: issue.description,
-          issueAuthor: await this.gitlabClient?.getUserEmail(
-            issue.author.id,
-            issue.author.username,
-          ),
-          projectOwner: await this.gitlabClient?.getProjectOwnerEmail(issue.project_id),
+          issueAuthor: this.gitlabClient
+            ? await this.gitlabClient.getUserEmail(issue.author.id, issue.author.username)
+            : issue.author.username,
+          projectOwner: this.gitlabClient
+            ? await this.gitlabClient.getProjectOwnerEmail(issue.project_id)
+            : "unknown",
           containerId: containerId,
         },
+        mcpConfig: mcpConfig || undefined,
       };
 
       // Step 4: Send task to container (using the issue author's email for authentication)

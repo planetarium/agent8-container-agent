@@ -15,6 +15,7 @@ export interface TaskRequest {
   contextOptimization?: boolean;
   id?: string;
   gitlabInfo?: GitLabInfo;
+  mcpConfig?: string;
 }
 
 export interface TaskResponse {

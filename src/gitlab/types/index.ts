@@ -124,6 +124,7 @@ export interface GitLabComment {
   created_at: string;
   updated_at: string;
   system: boolean;
+  internal?: boolean;
 }
 
 export interface IssueState {

@@ -2,15 +2,32 @@ import { promises as fs } from "node:fs";
 import type { AuthManager } from "../../auth/index.js";
 import { parseCookies } from "../../cookieParser.js";
 import type { Agent8Client } from "../agent8Client.js";
+import { ConfigurationFormatter } from "../configurationFormatter.js";
 import type { TaskRequest } from "../types/api.js";
+import type { McpTransferData } from "../../types/mcpMetadata.js";
 
 export class Agent8ApiRoutes {
   private agent8Client: Agent8Client;
   private authManager: AuthManager;
+  private mcpData: McpTransferData | null = null;
 
   constructor(agent8Client: Agent8Client, authManager: AuthManager) {
     this.agent8Client = agent8Client;
     this.authManager = authManager;
+  }
+
+  setMcpConfiguration(mcpConfig: string | null): void {
+    if (!mcpConfig) {
+      this.mcpData = null;
+      return;
+    }
+
+    // Parse and store as typed data for efficient access
+    this.mcpData = ConfigurationFormatter.parseMcpConfiguration(mcpConfig);
+    if (!this.mcpData) {
+      console.error('[MCP] Failed to parse MCP configuration:', mcpConfig);
+      this.mcpData = null;
+    }
   }
 
   async handleRequest(req: Request): Promise<Response | null> {
@@ -50,6 +67,10 @@ export class Agent8ApiRoutes {
         if (taskId) {
           return await this.handleTaskStatusApi(req, taskId, corsHeaders);
         }
+      }
+
+      if (path === "/api/agent8/mcp/servers" && method === "GET") {
+        return await this.handleMcpServersApi(corsHeaders);
       }
 
       return new Response(JSON.stringify({ error: "Agent8 API endpoint not found" }), {
@@ -244,6 +265,7 @@ export class Agent8ApiRoutes {
         contextOptimization: body.contextOptimization ?? true,
         cookies: cookieHeader || undefined,
         gitlabInfo: body.gitlabInfo,
+        mcpConfig: body.mcpConfig,
       });
 
       return Response.json({
@@ -284,5 +306,35 @@ export class Agent8ApiRoutes {
     }
 
     return Response.json({ success: true, task: taskStatus });
+  }
+
+  /**
+   * Get current container MCP server configuration
+   * GET /api/agent8/mcp/servers
+   */
+  private async handleMcpServersApi(corsHeaders: Record<string, string>): Promise<Response> {
+    if (!this.mcpData) {
+      return new Response(JSON.stringify({
+        servers: [],
+        configuration: null,
+        message: "No MCP servers configured for this container"
+      }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+
+    // Configuration is already parsed and typed - no need to re-parse!
+    const serversInfo = {
+      servers: this.mcpData.servers,
+      serverCount: this.mcpData.servers.length,
+      enabledServers: this.mcpData.servers.filter(s => s.enabled),
+      configuration: ConfigurationFormatter.formatMcpConfiguration(this.mcpData),
+      note: "LLM server handles MCP tool execution directly",
+      timestamp: new Date().toISOString()
+    };
+
+    return new Response(JSON.stringify(serversInfo), {
+      headers: { ...corsHeaders, "Content-Type": "application/json" }
+    });
   }
 }

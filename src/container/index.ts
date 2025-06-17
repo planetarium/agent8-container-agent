@@ -7,7 +7,6 @@
 
 export {
   ContainerTaskReporter,
-  createTaskEndpoint,
   type GitLabInfo,
   type TaskPayload,
   type TaskResult,

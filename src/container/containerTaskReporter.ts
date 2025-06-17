@@ -21,6 +21,7 @@ export interface TaskPayload {
   contextOptimization: boolean;
   files: any;
   gitlabInfo: GitLabInfo;
+  mcpConfig?: string;
 }
 
 export type TaskResult = TaskExecutionResult;
@@ -109,6 +110,8 @@ export class ContainerTaskReporter {
         files: taskPayload.files || {},
         promptId: taskPayload.promptId,
         contextOptimization: taskPayload.contextOptimization,
+        gitlabInfo: taskPayload.gitlabInfo,
+        mcpConfig: taskPayload.mcpConfig,
       };
 
       // Execute task
@@ -296,45 +299,4 @@ ${artifactList}`;
   }
 }
 
-/**
- * Express endpoint handler for /api/agent8/task
- */
-export function createTaskEndpoint() {
-  const reporter = new ContainerTaskReporter();
 
-  return async (req: any, res: any) => {
-    try {
-      const taskPayload: TaskPayload = req.body;
-
-      // Validate payload
-      if (!(taskPayload.messages && taskPayload.gitlabInfo)) {
-        return res.status(400).json({
-          success: false,
-          error: "Invalid task payload: missing messages or gitlabInfo",
-        });
-      }
-
-      // Generate task ID
-      const taskId = `task-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-
-      // Respond immediately
-      res.json({
-        success: true,
-        taskId: taskId,
-        status: "accepted",
-        message: "Task accepted for processing",
-      });
-
-      // Execute task and report asynchronously
-      reporter.executeTaskAndReport(taskPayload).catch((error) => {
-        console.error("[Container-Reporter] Async task execution failed:", error);
-      });
-    } catch (error) {
-      console.error("[Container-Reporter] Endpoint error:", error);
-      res.status(500).json({
-        success: false,
-        error: "Internal server error",
-      });
-    }
-  };
-}

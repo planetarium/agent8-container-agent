@@ -3,6 +3,7 @@ export { GitLabClient } from "./services/gitlabClient.js";
 export { GitLabContainerService } from "./services/gitlabContainerService.js";
 export { GitLabTaskDelegationService } from "./services/gitlabTaskDelegationService.js";
 export { GitLabLabelService } from "./services/gitlabLabelService.js";
+export { McpConfigurationService } from "./services/mcpConfigurationService.js";
 export { GitLabIssueRepository } from "./repositories/gitlabIssueRepository.js";
 export { ContainerTrigger } from "./triggers/containerTrigger.js";
 export { GitLabApiRoutes } from "./api/gitlabApiRoutes.js";
