@@ -86,6 +86,6 @@ COPY --from=template-builder /app/agent8-templates /app/agent8-templates
 COPY --from=template-builder /app/agent8-templates/node_modules ./node_modules
 COPY --from=template-builder /app/agent8-templates/pnpm-lock.yaml ./pnpm-lock.yaml
 
-EXPOSE 3000
+EXPOSE 30000
 
 ENTRYPOINT ["bun", "/app/dist/index.js"]

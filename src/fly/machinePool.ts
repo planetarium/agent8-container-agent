@@ -137,13 +137,13 @@ export class MachinePool {
       image,
       env: {
         FLY_PROCESS_GROUP: "worker",
-        PORT: "3000",
+        PORT: "30000",
         PRIMARY_REGION: "nrt"
       },
       services: [
         {
           protocol: "tcp",
-          internal_port: 3000,
+          internal_port: 30000,
           ports: [
             { port: 80, handlers: ["http"] },
             { port: 443, handlers: ["tls", "http"] }

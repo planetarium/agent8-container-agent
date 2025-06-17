@@ -9,7 +9,7 @@ dotenv.config();
 
 function main() {
   const config = {
-    port: Number.parseInt(process.env.PORT || "3000", 10),
+    port: Number.parseInt(process.env.PORT || "30000", 10),
     workdirName: process.env.WORKDIR_NAME || "/workspace",
     coep: process.env.COEP || "credentialless",
     forwardPreviewErrors: process.env.FORWARD_PREVIEW_ERRORS === "true",

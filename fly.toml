@@ -10,11 +10,11 @@ primary_region = 'nrt'
   dockerfile = 'Containerfile'
 
 [env]
-  PORT = '3000'
+  PORT = '30000'
 
 [[services]]
   protocol = 'tcp'
-  internal_port = 3000
+  internal_port = 30000
   processes = ["app"]
 
   [[services.ports]]
@@ -26,7 +26,7 @@ primary_region = 'nrt'
     handlers = ['tls', 'http']
 
   [[services.ports]]
-    port = 3000
+    port = 30000
     handlers = ['http']
 
 [[vm]]
