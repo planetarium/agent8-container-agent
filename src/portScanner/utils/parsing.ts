@@ -7,7 +7,7 @@ export function parseIpAddress(hex: string): string {
 		}
 		return ip.reverse().join('.');
 	} else {
-		// IPv6 (간단한 구현 - 필요에 따라 확장)
+		// IPv6 (simple implementation - expand as needed)
 		return 'localhost';
 	}
 }
@@ -40,7 +40,7 @@ export function parseNetworkTables(tcp: string, tcp6: string): { socket: number;
 			const parts = line.split(/\s+/);
 			if (parts.length < 10) continue;
 
-			// 상태 값 확인 (10은 LISTEN)
+			// Check state value (10 is LISTEN)
 			if (parts[3] === '0A' || parts[3].toLowerCase() === '0a') {
 				const socket = parseInt(parts[9], 10);
 				const addressParts = parts[1].split(':');
@@ -72,7 +72,7 @@ export function parseWindowsNetstat(output: string): { host: string; port: numbe
 				if (addressParts.length === 2) {
 					const host = addressParts[0];
 					const port = parseInt(addressParts[1], 10);
-					const state = parts[3]; // LISTENING, ESTABLISHED 등
+					const state = parts[3]; // LISTENING, ESTABLISHED, etc.
 					const pid = parseInt(parts[4], 10);
 
 					if (state === 'LISTENING' && !isNaN(port) && !isNaN(pid)) {

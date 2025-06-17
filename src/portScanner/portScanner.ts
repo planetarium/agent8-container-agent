@@ -19,7 +19,7 @@ export class PortScanner extends EventEmitter<PortMonitorEvents> {
 	constructor(options: PortScannerOptions = {}) {
 		super();
 
-		// 기본 옵션 설정
+		// Set default options
 		this.options = {
 			scanIntervalMs: options.scanIntervalMs ?? 2000,
 			portFilter: options.portFilter,
@@ -32,7 +32,7 @@ export class PortScanner extends EventEmitter<PortMonitorEvents> {
 	}
 
 	/**
-	 * 포트 스캐닝 시작
+	 * Start port scanning
 	 */
 	async start(): Promise<void> {
 		if (this.isScanning) return;
@@ -40,7 +40,7 @@ export class PortScanner extends EventEmitter<PortMonitorEvents> {
 		this.isScanning = true;
 
 		try {
-			// 초기 포트 스캔
+			// Initial port scan
 			this.lastFoundPorts = await this.findAndFilterPorts();
 			this.emit('portsInitialized', this.lastFoundPorts);
 			this.emit('started');
@@ -55,15 +55,15 @@ export class PortScanner extends EventEmitter<PortMonitorEvents> {
 					const newPorts = await this.findAndFilterPorts();
 					const timeTaken = Date.now() - startTime;
 
-					// 처음 몇 번의 스캔은 평균에서 제외 (초기화 시간이 더 오래 걸림)
+					// Exclude the first few scans from the average (initialization takes longer)
 					if (scanCount++ > 3) {
 						this.movingAverage.update(timeTaken);
 					}
 
-					// 변경점 감지 및 이벤트 발생
+					// Detect changes and emit events
 					this.detectChanges(newPorts);
 
-					// 다음 스캔 시간 계산 - 스캔 소요 시간에 따라 동적 조정
+					// Calculate next scan time - dynamically adjust based on scan duration
 					this.scanDelay = this.calculateDelay(this.movingAverage.value);
 
 					if (this.options.enableLogging) {
@@ -85,7 +85,7 @@ export class PortScanner extends EventEmitter<PortMonitorEvents> {
 	}
 
 	/**
-	 * 포트 스캐닝 중지
+	 * Stop port scanning
 	 */
 	stop(): void {
 		if (!this.isScanning) return;
@@ -100,19 +100,19 @@ export class PortScanner extends EventEmitter<PortMonitorEvents> {
 	}
 
 	/**
-	 * 현재 모니터링 중인 포트 목록 반환
+	 * Return list of currently monitored ports
 	 */
 	getCurrentPorts(): CandidatePort[] {
 		return [...this.lastFoundPorts];
 	}
 
 	/**
-	 * 즉시 포트 스캔 실행 (수동)
+	 * Execute immediate port scan (manual)
 	 */
 	async scanNow(): Promise<CandidatePort[]> {
 		const ports = await this.findAndFilterPorts();
 
-		// 스캐닝 중인 경우만 변경점 감지 처리
+		// Process change detection only when scanning
 		if (this.isScanning) {
 			this.detectChanges(ports);
 		}
@@ -121,7 +121,7 @@ export class PortScanner extends EventEmitter<PortMonitorEvents> {
 	}
 
 	/**
-	 * 옵션 업데이트
+	 * Update options
 	 */
 	updateOptions(newOptions: Partial<PortScannerOptions>): void {
 		this.options = {
@@ -135,7 +135,7 @@ export class PortScanner extends EventEmitter<PortMonitorEvents> {
 	}
 
 	/**
-	 * 필터 적용하여 포트 목록 반환
+	 * Return port list with filters applied
 	 */
 	private async findAndFilterPorts(): Promise<CandidatePort[]> {
 		const allPorts = await detectListeningPorts();
@@ -143,12 +143,12 @@ export class PortScanner extends EventEmitter<PortMonitorEvents> {
 	}
 
 	/**
-	 * 필터 적용
+	 * Apply filters
 	 */
 	private applyFilters(ports: CandidatePort[]): CandidatePort[] {
 		let filtered = [...ports];
 
-		// 포트 필터 적용
+		// Apply port filter
 		if (this.options.portFilter) {
 			filtered = filtered.filter(port => {
 				if (Array.isArray(this.options.portFilter)) {
@@ -161,7 +161,7 @@ export class PortScanner extends EventEmitter<PortMonitorEvents> {
 			});
 		}
 
-		// 프로세스 필터 적용
+		// Apply process filter
 		if (this.options.processFilter) {
 			const filter = this.options.processFilter;
 			const regex = typeof filter === 'string' ? new RegExp(filter) : filter;
@@ -171,14 +171,14 @@ export class PortScanner extends EventEmitter<PortMonitorEvents> {
 			});
 		}
 
-		// 제외 프로세스 필터 적용
+		// Apply exclude process filter
 		if (this.options.excludeProcesses && this.options.excludeProcesses.length > 0) {
 			filtered = filtered.filter(port => {
 				if (!port.detail) return true;
 
 				const exclude = this.options.excludeProcesses as (string[] | RegExp[]);
 
-				// 정규식 또는 문자열 패턴 확인
+				// Check regex or string patterns
 				return !exclude.some(pattern => {
 					if (typeof pattern === 'string') {
 						return port.detail?.includes(pattern);
@@ -193,12 +193,12 @@ export class PortScanner extends EventEmitter<PortMonitorEvents> {
 	}
 
 	/**
-	 * 변경점 감지 및 이벤트 발생
+	 * Detect changes and emit events
 	 */
 	private detectChanges(newPorts: CandidatePort[]): void {
-		// 이전 목록과 새 목록 비교
+		// Compare previous list with new list
 		if (JSON.stringify(this.lastFoundPorts) !== JSON.stringify(newPorts)) {
-			// 변경된 포트 찾기
+			// Find changed ports
 			const added = newPorts.filter(
 				newPort => !this.lastFoundPorts.some(
 					oldPort => oldPort.port === newPort.port && oldPort.host === newPort.host
@@ -211,7 +211,7 @@ export class PortScanner extends EventEmitter<PortMonitorEvents> {
 				)
 			);
 
-			// 개별 포트 이벤트
+			// Individual port events
 			for (const port of added) {
 				this.emit('portAdded', port);
 			}
@@ -220,21 +220,21 @@ export class PortScanner extends EventEmitter<PortMonitorEvents> {
 				this.emit('portRemoved', port);
 			}
 
-			// 통합 변경 이벤트
+			// Unified change event
 			if (added.length > 0 || removed.length > 0) {
 				this.emit('portsChanged', { added, removed, all: newPorts });
 			}
 
-			// 포트 목록 업데이트
+			// Update port list
 			this.lastFoundPorts = newPorts;
 		}
 	}
 
 	/**
-	 * 다음 스캔 간격 계산
+	 * Calculate next scan interval
 	 */
 	private calculateDelay(movingAverage: number): number {
-		// 스캔 시간의 20배와 최소 간격 중 큰 값 사용
+		// Use the larger value between 20 times the scan time and minimum interval
 		return Math.max(movingAverage * 20, this.options.scanIntervalMs);
 	}
 }

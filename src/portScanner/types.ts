@@ -19,28 +19,28 @@ export interface PortChange {
 
 export interface PortScannerOptions {
 	/**
-	 * 초기 스캔 간격 (밀리초)
+	 * Initial scan interval (milliseconds)
 	 * @default 2000
 	 */
 	scanIntervalMs?: number;
 
 	/**
-	 * 특정 포트나 포트 범위만 모니터링
+	 * Monitor only specific ports or port ranges
 	 */
 	portFilter?: number[] | { min: number; max: number };
 
 	/**
-	 * 특정 프로세스만 모니터링 (정규식 패턴)
+	 * Monitor only specific processes (regex pattern)
 	 */
 	processFilter?: string | RegExp;
 
 	/**
-	 * 제외할 프로세스 (정규식 패턴)
+	 * Processes to exclude (regex pattern)
 	 */
 	excludeProcesses?: string[] | RegExp[];
 
 	/**
-	 * 로깅 활성화
+	 * Enable logging
 	 * @default false
 	 */
 	enableLogging?: boolean;
@@ -48,37 +48,37 @@ export interface PortScannerOptions {
 
 export interface PortMonitorEvents {
 	/**
-	 * 초기 포트 스캔 완료 시 발생
+	 * Triggered when initial port scan is completed
 	 */
 	portsInitialized: (ports: CandidatePort[]) => void;
 
 	/**
-	 * 포트 변경 감지 시 발생
+	 * Triggered when port changes are detected
 	 */
 	portsChanged: (changes: PortChange) => void;
 
 	/**
-	 * 새 포트 감지 시 발생
+	 * Triggered when new port is detected
 	 */
 	portAdded: (port: CandidatePort) => void;
 
 	/**
-	 * 포트 종료 시 발생
+	 * Triggered when port is closed
 	 */
 	portRemoved: (port: CandidatePort) => void;
 
 	/**
-	 * 스캔 중 에러 발생 시
+	 * Triggered when error occurs during scan
 	 */
 	error: (error: Error) => void;
 
 	/**
-	 * 스캐너 시작 시
+	 * Triggered when scanner starts
 	 */
 	started: () => void;
 
 	/**
-	 * 스캐너 종료 시
+	 * Triggered when scanner stops
 	 */
 	stopped: () => void;
 }

@@ -8,7 +8,7 @@ import { parseIpAddress, parseLinuxSocketInfo, parseNetworkTables, parseWindowsN
 const exec = promisify(execCb);
 
 /**
- * 실행 중인 프로세스 정보 수집
+ * Collect running process information
  */
 export async function collectProcessInfo(): Promise<ProcessInfo[]> {
 	const platform = os.platform();
@@ -39,15 +39,15 @@ async function collectLinuxProcessInfo(): Promise<ProcessInfo[]> {
 						const cmd = await fs.readFile(`/proc/${childName}/cmdline`, 'utf8');
 						processes.push({ pid, cwd, cmd: cmd.replace(/\0/g, ' ').trim() });
 					} catch (e) {
-						// 일부 프로세스의 정보를 읽을 수 없음 (권한 등의 문제)
+						// Cannot read some process information (permission issues)
 					}
 				}
 			} catch (e) {
-				// 디렉토리 읽기 오류
+				// Directory read error
 			}
 		}
 	} catch (e) {
-		// /proc 접근 불가
+		// Cannot access /proc
 		console.error('Error accessing /proc:', e);
 	}
 
@@ -57,7 +57,7 @@ async function collectLinuxProcessInfo(): Promise<ProcessInfo[]> {
 async function collectMacOSProcessInfo(): Promise<ProcessInfo[]> {
 	try {
 		const { stdout } = await exec('ps -eo pid,command -ww');
-		const lines = stdout.split('\n').slice(1); // 헤더 제거
+		const lines = stdout.split('\n').slice(1); // Remove header
 		const processes: ProcessInfo[] = [];
 
 		for (const line of lines) {
@@ -69,7 +69,7 @@ async function collectMacOSProcessInfo(): Promise<ProcessInfo[]> {
 					processes.push({
 						pid,
 						cmd: cmd.trim(),
-						cwd: '' // MacOS에서는 간단히 작업 디렉토리를 가져올 수 없음
+						cwd: '' // Cannot easily get working directory on macOS
 					});
 				}
 			}
@@ -85,7 +85,7 @@ async function collectMacOSProcessInfo(): Promise<ProcessInfo[]> {
 async function collectWindowsProcessInfo(): Promise<ProcessInfo[]> {
 	try {
 		const { stdout } = await exec('wmic process get processid,commandline,executablepath');
-		const lines = stdout.split('\n').slice(1); // 헤더 제거
+		const lines = stdout.split('\n').slice(1); // Remove header
 		const processes: ProcessInfo[] = [];
 
 		for (const line of lines) {
@@ -97,7 +97,7 @@ async function collectWindowsProcessInfo(): Promise<ProcessInfo[]> {
 					processes.push({
 						pid,
 						cmd: cmdLine.trim(),
-						cwd: '' // Windows에서는 현재 작업 디렉토리를 쉽게 가져올 수 없음
+						cwd: '' // Cannot easily get current working directory on Windows
 					});
 				}
 			}
@@ -111,7 +111,7 @@ async function collectWindowsProcessInfo(): Promise<ProcessInfo[]> {
 }
 
 /**
- * 리스닝 중인 포트 감지 (플랫폼별)
+ * Detect listening ports (platform-specific)
  */
 export async function detectListeningPorts(): Promise<CandidatePort[]> {
 	const platform = os.platform();
@@ -127,7 +127,7 @@ export async function detectListeningPorts(): Promise<CandidatePort[]> {
 
 async function detectLinuxPorts(): Promise<CandidatePort[]> {
 	try {
-		// TCP 연결 정보 읽기
+		// Read TCP connection information
 		let tcp = '';
 		let tcp6 = '';
 
@@ -135,25 +135,25 @@ async function detectLinuxPorts(): Promise<CandidatePort[]> {
 			tcp = await fs.readFile('/proc/net/tcp', 'utf8');
 			tcp6 = await fs.readFile('/proc/net/tcp6', 'utf8');
 		} catch (e) {
-			// 파일 읽기 오류
+			// File read error
 		}
 
 		const connections = parseNetworkTables(tcp, tcp6);
 
-		// 소켓-프로세스 매핑 가져오기
+		// Get socket-process mapping
 		const { stdout: procSockets } = await exec('ls -l /proc/[0-9]*/fd/[0-9]* | grep socket:');
 		const socketMap = parseLinuxSocketInfo(procSockets);
 
-		// 프로세스 정보 수집
+		// Collect process information
 		const processes = await collectLinuxProcessInfo();
 
-		// 프로세스별 매핑
+		// Process mapping
 		const processMap = processes.reduce((m: Record<string, ProcessInfo>, process) => {
 			m[process.pid] = process;
 			return m;
 		}, {});
 
-		// 필터링된 연결만 사용
+		// Use only filtered connections
 		const ports: CandidatePort[] = [];
 
 		for (const { socket, ip, port } of connections) {
@@ -182,9 +182,9 @@ async function detectLinuxPorts(): Promise<CandidatePort[]> {
 
 async function detectMacOSPorts(): Promise<CandidatePort[]> {
 	try {
-		// 맥OS에서는 lsof로 포트 정보 수집
+		// Collect port information using lsof on macOS
 		const { stdout } = await exec('lsof -iTCP -sTCP:LISTEN -n -P');
-		const lines = stdout.split('\n').slice(1); // 헤더 제거
+		const lines = stdout.split('\n').slice(1); // Remove header
 		const ports: CandidatePort[] = [];
 
 		for (const line of lines) {
@@ -198,7 +198,7 @@ async function detectMacOSPorts(): Promise<CandidatePort[]> {
 
 			const command = parts[0];
 			const pid = parseInt(parts[1], 10);
-			const addressInfo = parts[8]; // 예: *:3000, 127.0.0.1:8080 등
+			const addressInfo = parts[8]; // e.g. *:3000, 127.0.0.1:8080, etc.
 
 			const addressMatch = addressInfo.match(/^(.+?):(\d+)/);
 			if (addressMatch) {
@@ -228,14 +228,14 @@ async function detectWindowsPorts(): Promise<CandidatePort[]> {
 		const { stdout } = await exec('netstat -ano');
 		const rawPorts = parseWindowsNetstat(stdout);
 
-		// 프로세스 정보 수집
+		// Collect process information
 		const processes = await collectWindowsProcessInfo();
 		const processMap = processes.reduce((m: Record<number, ProcessInfo>, process) => {
 			m[process.pid] = process;
 			return m;
 		}, {});
 
-		// 포트 정보 보강
+		// Enhance port information
 		return rawPorts.map(port => ({
 			...port,
 			detail: port.pid ? processMap[port.pid]?.cmd : undefined
@@ -246,7 +246,7 @@ async function detectWindowsPorts(): Promise<CandidatePort[]> {
 	}
 }
 
-// 이동 평균 계산 유틸리티
+// Moving average calculation utility
 export class MovingAverage {
 	private values: number[] = [];
 	private maxValues = 5;

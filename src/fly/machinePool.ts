@@ -48,18 +48,18 @@ export class MachinePool {
    */
   private async checkPool(): Promise<void> {
     try {
-      // 1. 실제 머신 상태 조회 (Fly API)
+      // 1. Query actual machine status (Fly API)
       const flyMachines = await this.flyClient.listFlyMachines();
       const flyMachineIds = new Set(flyMachines.map((m: any) => m.id));
 
-      // 2. DB 상태 조회 및 동기화 (트랜잭션 범위 축소)
+      // 2. Query DB status and synchronize (reduced transaction scope)
       await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-        // DB에서 머신 목록 조회
+        // Query machine list from DB
         const machines = await tx.machine_pool.findMany({
           where: { deleted: false },
         });
         const dbMachineIds = new Set(machines.map((m: { machine_id: string }) => m.machine_id));
-        // 3. DB에는 있는데 실제로 없는 머신 → soft delete
+        // 3. Machines in DB but not actually existing → soft delete
         const machinesToDelete = machines.filter((m: { machine_id: string }) => !flyMachineIds.has(m.machine_id));
         if (machinesToDelete.length > 0) {
           await tx.machine_pool.updateMany({
@@ -69,7 +69,7 @@ export class MachinePool {
             data: { deleted: true }
           });
         }
-        // 4. 실제로는 있는데 DB에 없는 머신 → DB에 추가
+        // 4. Machines actually existing but not in DB → add to DB
         const machinesToAdd = flyMachines.filter((m: { id: string }) => !dbMachineIds.has(m.id));
         if (machinesToAdd.length > 0) {
           await tx.machine_pool.createMany({
@@ -86,7 +86,7 @@ export class MachinePool {
         return machines;
       });
 
-      // 5. 사용 가능한 머신만 카운트해서 풀 사이즈 유지 (트랜잭션 밖)
+      // 5. Count only available machines and maintain pool size (outside transaction)
       const availableCount = await prisma.machine_pool.count({
         where: {
           is_available: true,
@@ -167,11 +167,11 @@ export class MachinePool {
         Array.from({ length: count }, () => this.getMachineCreationOptions())
       );
 
-      // Fly API에 병렬로 머신 생성 요청
+      // Request machine creation to Fly API in parallel
       const machines = await Promise.all(optionsList.map(opt => this.flyClient.createMachine(opt, 0)));
       const validMachines = machines.filter(m => m && m.id);
       if (validMachines.length > 0) {
-        // DB에 한꺼번에 저장 (항상 트랜잭션 사용)
+        // Save to DB all at once (always use transaction)
         await prisma.$transaction(async (tx) => {
           await tx.machine_pool.createMany({
             data: validMachines.map((m: any) => ({

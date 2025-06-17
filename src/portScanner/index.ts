@@ -1,7 +1,7 @@
-// 메인 모듈 내보내기
+// Export main module
 export { PortScanner } from './portScanner';
 
-// 타입 내보내기
+// Export types
 export type {
 	CandidatePort,
 	ProcessInfo,
@@ -10,5 +10,5 @@ export type {
 	PortMonitorEvents
 } from './types';
 
-// 유틸리티 함수 노출
+// Expose utility functions
 export { detectListeningPorts } from './utils/platform';

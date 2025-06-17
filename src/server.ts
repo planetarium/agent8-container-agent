@@ -42,10 +42,10 @@ function isDirectConnection(data: WebSocketData): data is DirectConnectionData {
   return data && "wsId" in data;
 }
 
-// CORS 미들웨어 함수
+// CORS middleware function
 function corsMiddleware(handler: (req: Request, server?: any) => Promise<Response | undefined> | Response | undefined) {
   return async (req: Request, server?: any) => {
-    // OPTIONS 요청 처리
+    // Handle OPTIONS requests
     if (req.method === 'OPTIONS') {
       return new Response(null, {
         status: 204,
@@ -58,11 +58,11 @@ function corsMiddleware(handler: (req: Request, server?: any) => Promise<Respons
       });
     }
 
-    // 실제 요청 처리
+    // Handle actual requests
     const response = await handler(req, server);
     if (!response) return;
 
-    // CORS 헤더 추가
+    // Add CORS headers
     const headers = new Headers(response.headers);
     headers.set('Access-Control-Allow-Origin', '*');
     headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
