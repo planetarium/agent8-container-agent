@@ -13,9 +13,7 @@
       "@/*": ["src/*"]
     },
     "typeRoots": [
-      "./node_modules/@types",
-      "./node_modules/bun-types",
-      "./types"
+      "./node_modules/@types"
     ]
   },
   "include": [

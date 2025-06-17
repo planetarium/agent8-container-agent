@@ -2,9 +2,10 @@
 /// <reference types="bun-types" />
 
 import { FlyClient } from './client';
-import { PrismaClient as BasePrismaClient, type machine_pool } from '@prisma/client';
+import { PrismaClient } from '@prisma/client';
+import type { machine_pool, Prisma } from '@prisma/client';
 
-const prisma = new BasePrismaClient();
+const prisma = new PrismaClient();
 
 interface FlyMachine {
   id: string;
@@ -18,8 +19,7 @@ interface FlyMachine {
   image?: string;
 }
 
-type MachinePoolRecord = machine_pool;
-type TransactionCallback<T> = (tx: BasePrismaClient) => Promise<T>;
+type MachinePoolRecord = Pick<machine_pool, 'machine_id'>;
 
 function isFlyMachine(obj: unknown): obj is FlyMachine {
   return typeof obj === 'object' && obj !== null && 'id' in obj;
@@ -73,18 +73,18 @@ export class MachinePoolManager {
       const flyMachines = await this.flyClient.listFlyMachines();
       const flyMachineIds = new Set(flyMachines.filter(isFlyMachine).map(m => m.id));
 
-      const callback: TransactionCallback<MachinePoolRecord[]> = async (tx: BasePrismaClient) => {
+      await prisma.$transaction<MachinePoolRecord[]>(async (tx) => {
         const machines = await tx.machine_pool.findMany({
           where: { deleted: false },
           select: { machine_id: true }
         });
-        const dbMachineIds = new Set(machines.map((m: { machine_id: string }) => m.machine_id));
+        const dbMachineIds = new Set(machines.map(m => m.machine_id));
         
-        const machinesToDelete = machines.filter((m: { machine_id: string }) => !flyMachineIds.has(m.machine_id));
+        const machinesToDelete = machines.filter(m => !flyMachineIds.has(m.machine_id));
         if (machinesToDelete.length > 0) {
           await tx.machine_pool.updateMany({
             where: {
-              machine_id: { in: machinesToDelete.map((m: { machine_id: string }) => m.machine_id) }
+              machine_id: { in: machinesToDelete.map(m => m.machine_id) }
             },
             data: { deleted: true }
           });
@@ -107,9 +107,7 @@ export class MachinePoolManager {
           });
         }
         return machines;
-      };
-
-      await prisma.$transaction(callback);
+      });
 
       const availableCount = await prisma.machine_pool.count({
         where: {
@@ -196,7 +194,7 @@ export class MachinePoolManager {
       const validMachines = machines.filter((m): m is FlyMachine => isFlyMachine(m));
       
       if (validMachines.length > 0) {
-        const callback: TransactionCallback<void> = async (tx) => {
+        await prisma.$transaction(async (tx) => {
           await tx.machine_pool.createMany({
             data: validMachines.map(m => ({
               machine_id: m.id,
@@ -207,9 +205,7 @@ export class MachinePoolManager {
             })),
             skipDuplicates: true,
           });
-        };
-
-        await prisma.$transaction(callback);
+        });
       }
     } catch (error) {
       console.error('Error creating new machines:', error);
