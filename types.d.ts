@@ -1,8 +1,6 @@
 /// <reference types="node" />
 /// <reference types="bun-types" />
 
-import type { PrismaClient as BasePrismaClient } from '@prisma/client';
-
 declare global {
   namespace NodeJS {
     interface ProcessEnv {
@@ -25,10 +23,6 @@ declare global {
 }
 
 declare module '@prisma/client' {
-  interface PrismaClient extends BasePrismaClient {
-    $transaction<T>(fn: (prisma: PrismaClient) => Promise<T>): Promise<T>;
-  }
-
   interface machine_pool {
     id: bigint;
     created_at: Date;
