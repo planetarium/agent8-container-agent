@@ -1,11 +1,13 @@
+/// <reference types="node" />
+
 import process from "node:process";
 import { ContainerServer } from "./src/server";
-import dotenv from "dotenv";
+import { config as dotenvConfig } from "dotenv";
 import { MachinePool } from "./src/fly/machinePool";
 import { FlyClient } from "./src/fly";
 
 // Load environment variables from .env file
-dotenv.config();
+dotenvConfig();
 
 interface ContainerConfig {
   port: number;
