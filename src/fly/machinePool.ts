@@ -17,6 +17,9 @@ interface FlyMachine {
   image?: string;
 }
 
+type MachinePoolRecord = Prisma.machine_poolGetPayload<{}>;
+type TransactionCallback<T> = (tx: Prisma.TransactionClient) => Promise<T>;
+
 function isFlyMachine(obj: unknown): obj is FlyMachine {
   return typeof obj === 'object' && obj !== null && 'id' in obj;
 }
@@ -31,12 +34,12 @@ export class MachinePool {
     flyClient: FlyClient,
     options: {
       defaultPoolSize: number;
-      checkInterval?: number; // in milliseconds
+      checkInterval?: number;
     }
   ) {
     this.flyClient = flyClient;
     this.defaultPoolSize = options.defaultPoolSize;
-    this.checkInterval = options.checkInterval || 60000; // default 1 minute
+    this.checkInterval = options.checkInterval || 60000;
   }
 
   /**
@@ -66,13 +69,10 @@ export class MachinePool {
    */
   private async checkPool(): Promise<void> {
     try {
-      // 1. 실제 머신 상태 조회 (Fly API)
       const flyMachines = await this.flyClient.listFlyMachines();
       const flyMachineIds = new Set(flyMachines.filter(isFlyMachine).map(m => m.id));
 
-      // 2. DB 상태 조회 및 동기화 (트랜잭션 범위 축소)
-      await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-        // DB에서 머신 목록 조회
+      const callback: TransactionCallback<MachinePoolRecord[]> = async (tx) => {
         const machines = await tx.machine_pool.findMany({
           where: { deleted: false },
           select: { machine_id: true }
@@ -92,6 +92,7 @@ export class MachinePool {
         const machinesToAdd = flyMachines.filter((m): m is FlyMachine => 
           isFlyMachine(m) && !dbMachineIds.has(m.id)
         );
+        
         if (machinesToAdd.length > 0) {
           await tx.machine_pool.createMany({
             data: machinesToAdd.map(m => ({
@@ -105,9 +106,10 @@ export class MachinePool {
           });
         }
         return machines;
-      });
+      };
 
-      // 5. 사용 가능한 머신만 카운트해서 풀 사이즈 유지 (트랜잭션 밖)
+      await prisma.$transaction(callback);
+
       const availableCount = await prisma.machine_pool.count({
         where: {
           is_available: true,
@@ -115,6 +117,7 @@ export class MachinePool {
           assigned_to: null,
         }
       });
+
       if (availableCount < this.defaultPoolSize) {
         const toCreate = this.defaultPoolSize - availableCount;
         await this.createNewMachines(toCreate);
@@ -188,12 +191,11 @@ export class MachinePool {
         Array.from({ length: count }, () => this.getMachineCreationOptions())
       );
 
-      // Fly API에 병렬로 머신 생성 요청
       const machines = await Promise.all(optionsList.map(opt => this.flyClient.createMachine(opt, 0)));
       const validMachines = machines.filter((m): m is FlyMachine => isFlyMachine(m));
+      
       if (validMachines.length > 0) {
-        // DB에 한꺼번에 저장 (항상 트랜잭션 사용)
-        await prisma.$transaction(async (tx) => {
+        const callback: TransactionCallback<void> = async (tx) => {
           await tx.machine_pool.createMany({
             data: validMachines.map(m => ({
               machine_id: m.id,
@@ -204,7 +206,9 @@ export class MachinePool {
             })),
             skipDuplicates: true,
           });
-        });
+        };
+
+        await prisma.$transaction(callback);
       }
     } catch (error) {
       console.error('Error creating new machines:', error);
