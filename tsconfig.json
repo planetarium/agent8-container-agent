@@ -6,10 +6,6 @@
     "module": "commonjs",
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "types": [
-      "node",
-      "bun-types"
-    ],
     "noEmit": true,
     "allowImportingTsExtensions": true,
     "baseUrl": ".",
@@ -25,7 +21,8 @@
   "include": [
     "src/**/*",
     "index.ts",
-    "preview.ts"
+    "preview.ts",
+    "types.d.ts"
   ],
   "exclude": [
     "node_modules"

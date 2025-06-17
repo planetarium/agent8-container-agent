@@ -2,10 +2,10 @@
 /// <reference types="bun-types" />
 
 import process from "node:process";
-import { ContainerServer } from "./src/server";
+import { ContainerServer } from "@/server";
 import { config as dotenvConfig } from "dotenv";
-import { MachinePoolManager } from "./src/fly/machinePool";
-import { FlyClient } from "./src/fly";
+import { MachinePoolManager } from "@/fly/machinePool";
+import { FlyClient } from "@/fly";
 
 // Load environment variables from .env file
 dotenvConfig();
