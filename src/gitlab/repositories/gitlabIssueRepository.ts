@@ -211,8 +211,10 @@ export class GitLabIssueRepository {
   }
 
   async getProjectBlockingCount(projectId: number): Promise<number> {
+    console.info(`[Blocking Check] Checking project ${projectId} for blocking issues...`);
+
     const allProjectIssues = await this.prisma.gitlab_issues.findMany({
-      select: { labels: true },
+      select: { labels: true, gitlab_iid: true },
       where: {
         project_id: projectId,
         OR: [{ labels: { contains: '"WIP"' } }, { labels: { contains: '"CONFIRM NEEDED"' } }],
@@ -220,11 +222,24 @@ export class GitLabIssueRepository {
     });
 
     let blockingCount = 0;
+    const blockingIssues: number[] = [];
+
     for (const issue of allProjectIssues) {
       const labels = JSON.parse(issue.labels) as string[];
       if (labels.includes("WIP") || labels.includes("CONFIRM NEEDED")) {
         blockingCount++;
+        blockingIssues.push(issue.gitlab_iid);
       }
+    }
+
+    if (blockingCount > 0) {
+      console.info(
+        `[Blocking Check] Project ${projectId}: Found ${blockingCount} blocking issues (${blockingIssues.map((iid) => `#${iid}`).join(", ")})`,
+      );
+    } else {
+      console.info(
+        `[Blocking Check] Project ${projectId}: No blocking issues found, project is available for processing`,
+      );
     }
 
     return blockingCount;
@@ -288,6 +303,8 @@ export class GitLabIssueRepository {
       async (tx) => {
         await tx.$executeRaw`SET LOCAL statement_timeout = '10s'`;
 
+        console.info("[Issue Selection] Step 1: Acquiring locks on all relevant issues...");
+
         // Step 1: Lock ALL relevant issues first (TODO + WIP + CONFIRM NEEDED)
         const allRelevantIssues = await tx.$queryRaw<
           Array<{
@@ -314,7 +331,15 @@ export class GitLabIssueRepository {
         FOR UPDATE NOWAIT
       `;
 
+        console.info(
+          `[Issue Selection] Step 1 Complete: Locked ${allRelevantIssues.length} relevant issues across all projects`,
+        );
+
         // Step 2: Analyze in memory to find processable issues
+        console.info(
+          "[Issue Selection] Step 2: Analyzing issues by project to find processable candidates...",
+        );
+
         const projectStats = new Map<
           number,
           { blockingCount: number; todoIssues: typeof allRelevantIssues }
@@ -338,18 +363,45 @@ export class GitLabIssueRepository {
           }
         }
 
+        // Log project analysis results
+        console.info("[Issue Selection] Project analysis results:");
+        for (const [projectId, stats] of projectStats.entries()) {
+          console.info(
+            `  - Project ${projectId}: ${stats.blockingCount} blocking issues (WIP/CONFIRM NEEDED), ${stats.todoIssues.length} TODO issues`,
+          );
+        }
+
         // Step 3: Select oldest TODO from projects with no blocking issues
+        console.info(
+          "[Issue Selection] Step 3: Selecting oldest TODO issue from projects with no blocking issues...",
+        );
+
         const processableIssues: typeof allRelevantIssues = [];
 
-        for (const [, stats] of projectStats.entries()) {
+        for (const [projectId, stats] of projectStats.entries()) {
           if (stats.blockingCount === 0 && stats.todoIssues.length > 0) {
             // Sort by created_at and take the oldest
             stats.todoIssues.sort((a, b) => a.created_at.getTime() - b.created_at.getTime());
-            processableIssues.push(stats.todoIssues[0]);
+            const selectedIssue = stats.todoIssues[0];
+            processableIssues.push(selectedIssue);
+
+            console.info(
+              `  - Project ${projectId}: Selected issue #${selectedIssue.gitlab_iid} (created: ${selectedIssue.created_at.toISOString()})`,
+            );
+          } else if (stats.blockingCount > 0) {
+            console.info(
+              `  - Project ${projectId}: Skipped due to ${stats.blockingCount} blocking issues`,
+            );
+          } else {
+            console.info(`  - Project ${projectId}: No TODO issues available`);
           }
         }
 
         // Step 4: Update selected issues
+        console.info(
+          `[Issue Selection] Step 4: Marking ${processableIssues.length} selected issues as processing...`,
+        );
+
         if (processableIssues.length > 0) {
           const issueIds = processableIssues.map((issue) => issue.id);
           await tx.$executeRaw`
@@ -357,6 +409,10 @@ export class GitLabIssueRepository {
           SET processed_at = NOW()
           WHERE id = ANY(${issueIds})
         `;
+
+          console.info("[Issue Selection] Step 4 Complete: Issues marked for processing");
+        } else {
+          console.info("[Issue Selection] Step 4 Complete: No issues to mark (none selected)");
         }
 
         return processableIssues.map((issue) => ({

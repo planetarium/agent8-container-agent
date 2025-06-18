@@ -183,7 +183,12 @@ export class GitLabPoller {
   }
 
   private async selectProcessableIssuesWithLock(): Promise<GitLabIssueRecord[]> {
-    return await this.issueRepository.selectProcessableIssuesWithLock();
+    console.info("[GitLab Poller] Starting issue selection process with database lock...");
+    const selectedIssues = await this.issueRepository.selectProcessableIssuesWithLock();
+    console.info(
+      `[GitLab Poller] Issue selection complete: ${selectedIssues.length} issues selected for processing`,
+    );
+    return selectedIssues;
   }
 
   private async processSelectedIssues(issues: GitLabIssueRecord[]): Promise<void> {
@@ -197,27 +202,40 @@ export class GitLabPoller {
           `[GitLab Poller] Processing project ${storedIssue.project_id} issue #${storedIssue.gitlab_iid} (created: ${storedIssue.created_at.toISOString()})`,
         );
 
+        console.info(
+          `[Processing Validation] Validating project ${storedIssue.project_id} issue #${storedIssue.gitlab_iid} before container creation...`,
+        );
+
         const currentBlockingCount = await this.issueRepository.getProjectBlockingCount(
           storedIssue.project_id,
         );
+
         if (currentBlockingCount > 0) {
           console.info(
-            `[GitLab Poller] Project ${storedIssue.project_id} now has blocking issues (WIP or CONFIRM NEEDED), reverting selection`,
+            `[Processing Validation] ❌ Project ${storedIssue.project_id} now has ${currentBlockingCount} blocking issues, reverting selection for issue #${storedIssue.gitlab_iid}`,
           );
           await this.issueRepository.revertProcessingMark(Number(storedIssue.id));
           skippedCount++;
           continue;
         }
 
+        console.info(
+          `[Processing Validation] ✅ Project ${storedIssue.project_id} is clear for processing issue #${storedIssue.gitlab_iid}`,
+        );
+
         const currentIssue = await this.gitlabClient.getIssue(
           storedIssue.project_id,
           storedIssue.gitlab_iid,
         );
 
+        console.info(
+          `[Label Validation] Checking current labels for issue #${currentIssue.iid}...`,
+        );
+
         const currentLabel = this.labelService.getCurrentLifecycleLabel(currentIssue);
         if (currentLabel !== "TODO") {
           console.info(
-            `[GitLab Poller] Issue #${currentIssue.iid} no longer TODO (current: ${currentLabel}), reverting`,
+            `[Label Validation] ❌ Issue #${currentIssue.iid} no longer TODO (current: ${currentLabel}), reverting selection`,
           );
           await this.issueRepository.revertProcessingMark(Number(storedIssue.id));
           skippedCount++;
@@ -226,12 +244,16 @@ export class GitLabPoller {
 
         if (!this.labelService.hasTriggerLabel(currentIssue)) {
           console.info(
-            `[GitLab Poller] Issue #${currentIssue.iid} no longer has trigger label, reverting`,
+            `[Label Validation] ❌ Issue #${currentIssue.iid} no longer has trigger label, reverting selection`,
           );
           await this.issueRepository.revertProcessingMark(Number(storedIssue.id));
           skippedCount++;
           continue;
         }
+
+        console.info(
+          `[Label Validation] ✅ Issue #${currentIssue.iid} has valid labels (lifecycle: ${currentLabel}, has trigger label: true)`,
+        );
 
         console.info(
           `[GitLab Poller] Attempting container creation for issue #${currentIssue.iid}...`,
