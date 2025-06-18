@@ -954,13 +954,6 @@ export class ContainerServer {
     return this.agent8Client.getActiveTasksCount();
   }
 
-  /**
-   * Set MCP configuration for container API routes
-   */
-  public setMcpConfiguration(mcpConfig: string | null): void {
-    this.agent8ApiRoutes.setMcpConfiguration(mcpConfig);
-  }
-
   public async stop(): Promise<void> {
     // Self-destruction in DB and Fly
     try {

@@ -26,6 +26,7 @@ import { IssueLifecycleWorkflow } from "../gitlab/workflows/issueLifecycleWorkfl
 import type { IssueCompletionEvent } from "../gitlab/workflows/issueLifecycleWorkflow.ts";
 import type { ContainerServer } from "../server.ts";
 
+import type { McpTransferData } from "../types/mcpMetadata.ts";
 import { parseMcpConfiguration } from "./configurationFormatter.ts";
 import type { ActionCallbacks, ActionResult, BoltAction, ParserCallbacks } from "./index.ts";
 import { ActionRunner, StreamingMessageParser } from "./index.ts";
@@ -110,6 +111,7 @@ export class Agent8Client {
   private previousIssueState: IssueState | null = null;
   private readonly POLLING_INTERVAL = 30000; // 30 seconds
   private containerServer: ContainerServer;
+  private mcpData: McpTransferData | null = null;
 
   constructor(containerServer: ContainerServer, workdir: string) {
     this.containerServer = containerServer;
@@ -184,9 +186,8 @@ export class Agent8Client {
     }
     const files = await this.buildFileMapFromWorkdir();
 
-    // Set MCP configuration if provided
     if (request.mcpConfig) {
-      this.setContainerMcpConfiguration(request.mcpConfig);
+      this.mcpData = parseMcpConfiguration(request.mcpConfig);
       console.log(`[MCP] Task ${taskId} configured with MCP servers`);
     }
 
@@ -1352,22 +1353,6 @@ export class Agent8Client {
   }
 
   /**
-   * Set MCP configuration on container server
-   */
-  private setContainerMcpConfiguration(mcpConfig: string): void {
-    try {
-      if (this.containerServer && typeof this.containerServer.setMcpConfiguration === "function") {
-        this.containerServer.setMcpConfiguration(mcpConfig);
-        console.log("[MCP] Container MCP configuration set successfully");
-      } else {
-        console.warn("[MCP] Container server does not support MCP configuration");
-      }
-    } catch (error) {
-      console.error("[MCP] Failed to set container MCP configuration:", error);
-    }
-  }
-
-  /**
    * Build HTTP headers for LLM server requests with MCP configuration
    */
   private buildHeaders(request: ChatRequest): Record<string, string> {
@@ -1460,5 +1445,9 @@ export class Agent8Client {
     } else {
       console.log("[MCP-Integration] No MCP configuration available for this task");
     }
+  }
+
+  public getMcpConfiguration(): McpTransferData | null {
+    return this.mcpData;
   }
 }
