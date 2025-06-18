@@ -97,7 +97,7 @@ export class GitLabClient {
     try {
       const issues = await this.gitlab.Issues.all({
         scope: "all",
-        state: "opened",
+        state: "all",
         orderBy: "updated_at",
         sort: "desc",
         updatedAfter: lastCheckTime.toISOString(),
