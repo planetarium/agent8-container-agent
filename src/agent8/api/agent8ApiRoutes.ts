@@ -1,10 +1,10 @@
 import { promises as fs } from "node:fs";
 import type { AuthManager } from "../../auth/index.js";
 import { parseCookies } from "../../cookieParser.js";
-import type { Agent8Client } from "../agent8Client.js";
-import { ConfigurationFormatter } from "../configurationFormatter.js";
-import type { TaskRequest } from "../types/api.js";
 import type { McpTransferData } from "../../types/mcpMetadata.js";
+import type { Agent8Client } from "../agent8Client.js";
+import { formatMcpConfiguration, parseMcpConfiguration } from "../configurationFormatter.js";
+import type { TaskRequest } from "../types/api.js";
 
 export class Agent8ApiRoutes {
   private agent8Client: Agent8Client;
@@ -23,9 +23,9 @@ export class Agent8ApiRoutes {
     }
 
     // Parse and store as typed data for efficient access
-    this.mcpData = ConfigurationFormatter.parseMcpConfiguration(mcpConfig);
+    this.mcpData = parseMcpConfiguration(mcpConfig);
     if (!this.mcpData) {
-      console.error('[MCP] Failed to parse MCP configuration:', mcpConfig);
+      console.error("[MCP] Failed to parse MCP configuration:", mcpConfig);
       this.mcpData = null;
     }
   }
@@ -314,27 +314,30 @@ export class Agent8ApiRoutes {
    */
   private async handleMcpServersApi(corsHeaders: Record<string, string>): Promise<Response> {
     if (!this.mcpData) {
-      return new Response(JSON.stringify({
-        servers: [],
-        configuration: null,
-        message: "No MCP servers configured for this container"
-      }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" }
-      });
+      return new Response(
+        JSON.stringify({
+          servers: [],
+          configuration: null,
+          message: "No MCP servers configured for this container",
+        }),
+        {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
+      );
     }
 
     // Configuration is already parsed and typed - no need to re-parse!
     const serversInfo = {
       servers: this.mcpData.servers,
       serverCount: this.mcpData.servers.length,
-      enabledServers: this.mcpData.servers.filter(s => s.enabled),
-      configuration: ConfigurationFormatter.formatMcpConfiguration(this.mcpData),
+      enabledServers: this.mcpData.servers.filter((s) => s.enabled),
+      configuration: formatMcpConfiguration(this.mcpData),
       note: "LLM server handles MCP tool execution directly",
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     };
 
     return new Response(JSON.stringify(serversInfo), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" }
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 }

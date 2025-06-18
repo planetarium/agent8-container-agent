@@ -1,5 +1,5 @@
-import type { McpTransferData } from "../types/mcpMetadata.js";
 import type { McpConfigurationService } from "../gitlab/services/mcpConfigurationService.js";
+import type { McpTransferData } from "../types/mcpMetadata.js";
 
 export class McpConfigurationManager {
   private configService: McpConfigurationService;
@@ -13,26 +13,30 @@ export class McpConfigurationManager {
    */
   async prepareMcpConfigurationForIssue(
     projectId: number,
-    issueIid: number
+    issueIid: number,
   ): Promise<string | null> {
-    console.log(`[MCP-Manager] Preparing MCP configuration for project ${projectId}, issue #${issueIid}`);
+    console.log(
+      `[MCP-Manager] Preparing MCP configuration for project ${projectId}, issue #${issueIid}`,
+    );
 
     try {
-      const configString = await this.configService.formatMcpConfiguration(
-        projectId,
-        issueIid
-      );
+      const configString = await this.configService.formatMcpConfiguration(projectId, issueIid);
 
       if (!configString) {
         console.log(`[MCP-Manager] No MCP configuration generated for issue #${issueIid}`);
         return null;
       }
 
-      console.log(`[MCP-Manager] ✅ Successfully prepared MCP configuration for issue #${issueIid}`);
+      console.log(
+        `[MCP-Manager] ✅ Successfully prepared MCP configuration for issue #${issueIid}`,
+      );
       console.log(`[MCP-Manager] Configuration string length: ${configString.length}`);
       return configString;
     } catch (error) {
-      console.error(`[MCP-Manager] Error preparing MCP configuration for issue #${issueIid}:`, error);
+      console.error(
+        `[MCP-Manager] Error preparing MCP configuration for issue #${issueIid}:`,
+        error,
+      );
       return null;
     }
   }
@@ -40,22 +44,20 @@ export class McpConfigurationManager {
   /**
    * Get MCP server configuration for current container
    */
-  async getMcpConfiguration(
-    projectId: number,
-    issueIid: number
-  ): Promise<McpTransferData | null> {
-    console.log(`[MCP-Manager] Getting raw MCP configuration for project ${projectId}, issue #${issueIid}`);
+  async getMcpConfiguration(projectId: number, issueIid: number): Promise<McpTransferData | null> {
+    console.log(
+      `[MCP-Manager] Getting raw MCP configuration for project ${projectId}, issue #${issueIid}`,
+    );
 
     try {
-      const result = await this.configService.retrieveMcpConfiguration(
-        projectId,
-        issueIid
-      );
+      const result = await this.configService.retrieveMcpConfiguration(projectId, issueIid);
 
       if (result) {
-        console.log(`[MCP-Manager] ✅ Retrieved MCP configuration with ${result.servers.length} servers`);
+        console.log(
+          `[MCP-Manager] ✅ Retrieved MCP configuration with ${result.servers.length} servers`,
+        );
       } else {
-        console.log(`[MCP-Manager] ❌ No MCP configuration found`);
+        console.log("[MCP-Manager] ❌ No MCP configuration found");
       }
 
       return result;

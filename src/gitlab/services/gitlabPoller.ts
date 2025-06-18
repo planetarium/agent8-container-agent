@@ -17,7 +17,6 @@ export class GitLabPoller {
   private isRunning = false;
   private checkInterval: number;
   private intervalId: NodeJS.Timeout | null = null;
-  private labelCheckInterval: number;
 
   constructor(config: GitLabConfig, machinePool: MachinePool) {
     this.gitlabClient = new GitLabClient(config.url, config.token);
@@ -33,7 +32,6 @@ export class GitLabPoller {
     // Initialize lifecycle management services
     this.labelService = new GitLabLabelService(this.gitlabClient, this.issueRepository);
     this.lifecycleWorkflow = new IssueLifecycleWorkflow(this.labelService, this.issueRepository);
-    this.labelCheckInterval = config.pollInterval * 60 * 1000; // Same as issue check for now
 
     // Initialize container trigger with label service for lifecycle validation
     this.containerTrigger = new ContainerTrigger(this.containerService, this.labelService);

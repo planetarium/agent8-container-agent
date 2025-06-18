@@ -1,6 +1,6 @@
+import type { McpConfigurationManager } from "../../agent8/mcpConfigurationManager.js";
 import { getContainerAuthTokenForUser } from "../../container/containerAuthClient.js";
 import type { TaskPayload } from "../../container/containerTaskReporter.js";
-import type { McpConfigurationManager } from "../../agent8/mcpConfigurationManager.js";
 import type { GitLabIssueRepository } from "../repositories/gitlabIssueRepository.js";
 import type {
   ApiResponse,
@@ -51,13 +51,12 @@ export class GitLabTaskDelegationService {
       const containerUrl = options.containerUrl || this.buildContainerUrl(containerId);
 
       // Step 2.5: Get MCP configuration for this issue
-      console.log(`[MCP-Integration] Starting MCP configuration retrieval for project ${issue.project_id}, issue #${issue.iid}`);
+      console.log(
+        `[MCP-Integration] Starting MCP configuration retrieval for project ${issue.project_id}, issue #${issue.iid}`,
+      );
 
       const mcpConfig = this.mcpConfigManager
-        ? await this.mcpConfigManager.prepareMcpConfigurationForIssue(
-            issue.project_id,
-            issue.iid
-          )
+        ? await this.mcpConfigManager.prepareMcpConfigurationForIssue(issue.project_id, issue.iid)
         : null;
 
       if (mcpConfig) {
@@ -65,11 +64,13 @@ export class GitLabTaskDelegationService {
         console.log(`[MCP-Integration] MCP config length: ${mcpConfig.length} characters`);
         console.log(`[MCP-Integration] MCP config preview: ${mcpConfig.substring(0, 200)}...`);
       } else {
-        console.log(`[MCP-Integration] ❌ No MCP configuration available for this task`);
+        console.log("[MCP-Integration] ❌ No MCP configuration available for this task");
         console.log(`[MCP-Integration] MCP Config Manager available: ${!!this.mcpConfigManager}`);
 
         if (this.mcpConfigManager) {
-          console.log(`[MCP-Integration] MCP Config Manager exists but returned null - this indicates no MCP metadata found`);
+          console.log(
+            "[MCP-Integration] MCP Config Manager exists but returned null - this indicates no MCP metadata found",
+          );
         }
       }
 

@@ -215,10 +215,7 @@ export class GitLabIssueRepository {
       select: { labels: true },
       where: {
         project_id: projectId,
-        OR: [
-          { labels: { contains: '"WIP"' } },
-          { labels: { contains: '"CONFIRM NEEDED"' } }
-        ]
+        OR: [{ labels: { contains: '"WIP"' } }, { labels: { contains: '"CONFIRM NEEDED"' } }],
       },
     });
 
@@ -254,7 +251,10 @@ export class GitLabIssueRepository {
       select: { project_id: true, labels: true },
     });
 
-    const projectStats = new Map<number, { todo: number; wip: number; confirmNeeded: number; others: number }>();
+    const projectStats = new Map<
+      number,
+      { todo: number; wip: number; confirmNeeded: number; others: number }
+    >();
 
     for (const issue of allIssues) {
       const labels = JSON.parse(issue.labels) as string[];
@@ -283,7 +283,7 @@ export class GitLabIssueRepository {
     return projectStats;
   }
 
-    async selectProcessableIssuesWithLock(): Promise<GitLabIssueRecord[]> {
+  async selectProcessableIssuesWithLock(): Promise<GitLabIssueRecord[]> {
     return await this.prisma.$transaction(
       async (tx) => {
         await tx.$executeRaw`SET LOCAL statement_timeout = '10s'`;
@@ -315,7 +315,10 @@ export class GitLabIssueRepository {
       `;
 
         // Step 2: Analyze in memory to find processable issues
-        const projectStats = new Map<number, { blockingCount: number; todoIssues: typeof allRelevantIssues }>();
+        const projectStats = new Map<
+          number,
+          { blockingCount: number; todoIssues: typeof allRelevantIssues }
+        >();
 
         // Group issues by project and count blocking issues (WIP + CONFIRM NEEDED)
         for (const issue of allRelevantIssues) {

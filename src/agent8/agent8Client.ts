@@ -1,31 +1,32 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { UIMessage } from "@ai-sdk/ui-utils";
-import { GitLabIssueRepository } from "../gitlab/repositories/gitlabIssueRepository.js";
-import { GitLabClient } from "../gitlab/services/gitlabClient.js";
-import { GitLabGitService } from "../gitlab/services/gitlabGitService.js";
-import { GitLabLabelService } from "../gitlab/services/gitlabLabelService.js";
-import type { GitLabInfo } from "../gitlab/types/api.js";
-import type { GitCommitPushResult, GitCommitResult } from "../gitlab/types/git.js";
-import type { GitLabIssue, IssueState } from "../gitlab/types/index.js";
-import type { LabelChangeEvent } from "../gitlab/types/lifecycle.js";
+import { GitLabIssueRepository } from "../gitlab/repositories/gitlabIssueRepository.ts";
+import { GitLabClient } from "../gitlab/services/gitlabClient.ts";
+import { GitLabGitService } from "../gitlab/services/gitlabGitService.ts";
+import { GitLabLabelService } from "../gitlab/services/gitlabLabelService.ts";
+import type { GitLabInfo } from "../gitlab/types/api.ts";
+import type { GitCommitPushResult, GitCommitResult } from "../gitlab/types/git.ts";
+import type { GitLabIssue, IssueState } from "../gitlab/types/index.ts";
+import type { LabelChangeEvent } from "../gitlab/types/lifecycle.ts";
 import {
   createActionFailureComment,
   createComment,
   createCommitFailureComment,
   createPushFailureComment,
   createSuccessComment,
-} from "../gitlab/utils/commentFormatter.js";
-import type { ErrorDetails, SuccessDetails } from "../gitlab/utils/commentFormatter.js";
-import { IssueLifecycleWorkflow } from "../gitlab/workflows/issueLifecycleWorkflow.js";
-import type { IssueCompletionEvent } from "../gitlab/workflows/issueLifecycleWorkflow.js";
+} from "../gitlab/utils/commentFormatter.ts";
+import type { ErrorDetails, SuccessDetails } from "../gitlab/utils/commentFormatter.ts";
+import { IssueLifecycleWorkflow } from "../gitlab/workflows/issueLifecycleWorkflow.ts";
+import type { IssueCompletionEvent } from "../gitlab/workflows/issueLifecycleWorkflow.ts";
 import type { ContainerServer } from "../server.ts";
+
+import { parseMcpConfiguration } from "./configurationFormatter.js";
 import type { ActionCallbacks, ActionResult, BoltAction, ParserCallbacks } from "./index.ts";
 import { ActionRunner, StreamingMessageParser } from "./index.ts";
 import type { FileMap } from "./types/fileMap.js";
 import { FileMapBuilder } from "./utils/fileMapBuilder.js";
 import { convertToUIMessages } from "./utils/messageUtils.js";
-import { ConfigurationFormatter } from "./configurationFormatter.js";
 
 interface TaskResponseData {
   taskId: string;
@@ -400,7 +401,9 @@ export class Agent8Client {
                 await this.handleActionFailure(taskId, request.gitlabInfo, actionResults);
               }
             } else if (request.gitlabInfo) {
+              console.warn("[Agent8] GitLabGitService is not available, skipping auto-commit/push");
             } else {
+              console.warn("[Agent8] GitLabInfo is not available, skipping auto-commit/push");
             }
           }
         } catch (error: any) {
@@ -606,7 +609,7 @@ export class Agent8Client {
     progress?: number;
     createdAt: Date;
   }> {
-    const activeTasks = [];
+    const activeTasks: ReturnType<Agent8Client["getActiveTasksInfo"]> = [];
     for (const task of this.tasks.values()) {
       if (task.status === "pending" || task.status === "running") {
         activeTasks.push({
@@ -655,12 +658,6 @@ export class Agent8Client {
       const commitPushResult = await this.gitlabGitService.commitAndPush(commitMessage);
 
       if (commitPushResult.success) {
-        if (commitPushResult.commitResult.commitHash) {
-        }
-
-        if (commitPushResult.pushResult.pushedBranch) {
-        }
-
         // Handle task success: add success comment and update issue status
         await this.handleTaskSuccess(taskId, gitlabInfo, commitPushResult);
       } else {
@@ -1225,14 +1222,14 @@ export class Agent8Client {
    */
   private setContainerMcpConfiguration(mcpConfig: string): void {
     try {
-      if (this.containerServer && typeof this.containerServer.setMcpConfiguration === 'function') {
+      if (this.containerServer && typeof this.containerServer.setMcpConfiguration === "function") {
         this.containerServer.setMcpConfiguration(mcpConfig);
-        console.log('[MCP] Container MCP configuration set successfully');
+        console.log("[MCP] Container MCP configuration set successfully");
       } else {
-        console.warn('[MCP] Container server does not support MCP configuration');
+        console.warn("[MCP] Container server does not support MCP configuration");
       }
     } catch (error) {
-      console.error('[MCP] Failed to set container MCP configuration:', error);
+      console.error("[MCP] Failed to set container MCP configuration:", error);
     }
   }
 
@@ -1241,9 +1238,9 @@ export class Agent8Client {
    */
   private buildHeaders(request: ChatRequest): Record<string, string> {
     const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      'User-Agent': 'Agent8-Container/1.0',
-      'Authorization': `Bearer ${request.token}`,
+      "Content-Type": "application/json",
+      "User-Agent": "Agent8-Container/1.0",
+      Authorization: `Bearer ${request.token}`,
     };
 
     let cookieString = "";
@@ -1271,7 +1268,7 @@ export class Agent8Client {
       } else {
         cookieString = mcpCookie;
       }
-      console.log('[MCP] Adding MCP configuration to LLM server request');
+      console.log("[MCP] Adding MCP configuration to LLM server request");
     }
 
     // Set final cookie header
@@ -1297,7 +1294,7 @@ export class Agent8Client {
 
     // Add MCP server information to payload for LLM server awareness
     if (request.mcpConfig) {
-      const mcpData = ConfigurationFormatter.parseMcpConfiguration(request.mcpConfig);
+      const mcpData = parseMcpConfiguration(request.mcpConfig);
       if (mcpData && mcpData.servers.length > 0) {
         payload.mcpContext = {
           availableServers: mcpData.servers.map((server: any) => server.name),
@@ -1315,17 +1312,19 @@ export class Agent8Client {
    */
   private logMcpIntegrationStatus(request: ChatRequest): void {
     if (request.mcpConfig) {
-      const mcpData = ConfigurationFormatter.parseMcpConfiguration(request.mcpConfig);
+      const mcpData = parseMcpConfiguration(request.mcpConfig);
       if (mcpData) {
         console.log(`[MCP-Integration] Found ${mcpData.servers.length} MCP servers for task`);
         mcpData.servers.forEach((server: any) => {
-          console.log(`[MCP-Integration] Server: ${server.name} (${server.url}) - ${server.enabled ? 'Enabled' : 'Disabled'}`);
+          console.log(
+            `[MCP-Integration] Server: ${server.name} (${server.url}) - ${server.enabled ? "Enabled" : "Disabled"}`,
+          );
         });
       } else {
-        console.warn('[MCP-Integration] Failed to parse MCP configuration');
+        console.warn("[MCP-Integration] Failed to parse MCP configuration");
       }
     } else {
-      console.log('[MCP-Integration] No MCP configuration available for this task');
+      console.log("[MCP-Integration] No MCP configuration available for this task");
     }
   }
 }

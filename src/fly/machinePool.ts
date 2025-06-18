@@ -59,7 +59,7 @@ export class MachinePool {
           where: { deleted: false },
         });
         const dbMachineIds = new Set(machines.map((m: { machine_id: string }) => m.machine_id));
-        
+
         // 3. DB에는 있는데 실제로 없는 머신 → soft delete
         const machinesToDelete = machines.filter(
           (m: { machine_id: string }) => !flyMachineIds.has(m.machine_id),
@@ -81,15 +81,15 @@ export class MachinePool {
           machinesToCheck.map(async (m) => {
             const metadata = await this.flyClient.getMachineMetadata(m.id);
             return { machine: m, hasUserId: !!metadata?.[this.metadataKey] };
-          })
+          }),
         );
 
         // userId가 없는 머신만 DB에 추가
         const machinesToAdd = metadataResults
-          .filter(result => !result.hasUserId)
-          .map(result => ({
+          .filter((result) => !result.hasUserId)
+          .map((result) => ({
             machine_id: result.machine.id,
-            ipv6: result.machine.private_ip || '',
+            ipv6: result.machine.private_ip || "",
             deleted: false,
             is_available: true,
             created_at: new Date(result.machine.created_at || Date.now()),
@@ -226,7 +226,7 @@ export class MachinePool {
       try {
         await this.flyClient.updateMachineMetadata(machine.id, this.metadataKey, userId);
       } catch (error) {
-        console.error('Error setting machine metadata:', error);
+        console.error("Error setting machine metadata:", error);
         // Metadata 설정 실패는 치명적이지 않으므로 계속 진행
       }
 
@@ -287,7 +287,7 @@ export class MachinePool {
         try {
           await this.flyClient.updateMachineMetadata(machineId, this.metadataKey, userId);
         } catch (error) {
-          console.error('Error updating machine metadata:', error);
+          console.error("Error updating machine metadata:", error);
           // Metadata update 실패는 치명적이지 않으므로 계속 진행
         }
 

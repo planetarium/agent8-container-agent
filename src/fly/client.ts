@@ -144,7 +144,7 @@ export class FlyClient {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({ value }),
-        }
+        },
       );
 
       if (!res.ok) {
@@ -185,13 +185,16 @@ export class FlyClient {
    */
   async getMachineMetadata(machineId: string): Promise<Record<string, string> | null> {
     try {
-      const res = await fetch(`${this.config.baseUrl}/apps/${this.config.appName}/machines/${machineId}/metadata`, {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${this.config.apiToken}`,
-          Accept: "application/json",
+      const res = await fetch(
+        `${this.config.baseUrl}/apps/${this.config.appName}/machines/${machineId}/metadata`,
+        {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${this.config.apiToken}`,
+            Accept: "application/json",
+          },
         },
-      });
+      );
 
       if (!res.ok) {
         if (res.status === 404) {

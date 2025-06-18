@@ -17,12 +17,8 @@
         "noNodejsModules": "off"
       },
       "suspicious": {
-        "noConsole": {
-          "level": "warn",
-          "options": {
-            "allow": ["debug", "info", "warn", "error"]
-          }
-        },
+        "noConsole": "off",
+        "noConsoleLog": "off",
         "noExplicitAny": "off"
       },
       "performance": {

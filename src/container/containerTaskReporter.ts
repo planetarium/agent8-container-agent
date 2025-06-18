@@ -298,5 +298,3 @@ ${artifactList}`;
     return comment;
   }
 }
-
-

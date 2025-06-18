@@ -276,7 +276,9 @@ export class GitLabClient {
    * Read internal notes from GitLab issue
    */
   async getInternalNotes(projectId: number, issueIid: number): Promise<GitLabComment[]> {
-    console.log(`[GitLab-Debug] Fetching internal notes for project ${projectId}, issue #${issueIid}`);
+    console.log(
+      `[GitLab-Debug] Fetching internal notes for project ${projectId}, issue #${issueIid}`,
+    );
 
     try {
       const url = `${this.baseUrl}/api/v4/projects/${projectId}/issues/${issueIid}/notes`;
@@ -299,26 +301,35 @@ export class GitLabClient {
       const comments = (await response.json()) as GitLabComment[];
       console.log(`[GitLab-Debug] Total notes retrieved: ${comments.length}`);
 
-      const internalNotes = comments.filter(comment => comment.internal === true);
-      console.log(`[GitLab-Debug] Internal notes filtered: ${internalNotes.length}/${comments.length}`);
+      const internalNotes = comments.filter((comment) => comment.internal === true);
+      console.log(
+        `[GitLab-Debug] Internal notes filtered: ${internalNotes.length}/${comments.length}`,
+      );
 
       // Log details about all notes for debugging
       comments.forEach((comment, index) => {
-        console.log(`[GitLab-Debug] Note ${index + 1}: ID=${comment.id}, internal=${comment.internal}, author=${comment.author?.username || 'unknown'}, system=${comment.system}`);
+        console.log(
+          `[GitLab-Debug] Note ${index + 1}: ID=${comment.id}, internal=${comment.internal}, author=${comment.author?.username || "unknown"}, system=${comment.system}`,
+        );
       });
 
       if (internalNotes.length === 0) {
         console.log(`[GitLab-Debug] No internal notes found for issue #${issueIid}`);
         // Also log all notes to see what we have
-        console.log(`[GitLab-Debug] All notes summary for debugging:`);
+        console.log("[GitLab-Debug] All notes summary for debugging:");
         comments.forEach((comment, index) => {
-          console.log(`[GitLab-Debug]   ${index + 1}. ${comment.internal ? 'INTERNAL' : 'PUBLIC'} note by ${comment.author?.username || 'unknown'} (created: ${comment.created_at})`);
+          console.log(
+            `[GitLab-Debug]   ${index + 1}. ${comment.internal ? "INTERNAL" : "PUBLIC"} note by ${comment.author?.username || "unknown"} (created: ${comment.created_at})`,
+          );
         });
       }
 
       return internalNotes;
     } catch (error) {
-      console.error(`[GitLab-Debug] Failed to fetch internal notes for project ${projectId}, issue #${issueIid}:`, error);
+      console.error(
+        `[GitLab-Debug] Failed to fetch internal notes for project ${projectId}, issue #${issueIid}:`,
+        error,
+      );
       throw error;
     }
   }
@@ -341,7 +352,7 @@ export class GitLabClient {
 
       return (await response.json()) as GitLabComment[];
     } catch (error) {
-      console.error(`[GitLab] Failed to fetch all notes:`, error);
+      console.error("[GitLab] Failed to fetch all notes:", error);
       throw error;
     }
   }

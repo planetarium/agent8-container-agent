@@ -1,6 +1,16 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import type { Dirent, Stats } from "node:fs";
-import { chown, mkdir, readFile, readdir, rm, rmdir, stat, unlink, writeFile } from "node:fs/promises";
+import {
+  chown,
+  mkdir,
+  readFile,
+  readdir,
+  rm,
+  rmdir,
+  stat,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { join, normalize } from "node:path";
 import process from "node:process";
 import { setTimeout } from "node:timers/promises";
@@ -992,7 +1002,12 @@ export class ContainerServer {
     // First try the container path, then fallback to local development path
     let ptyWrapperPath = "/app/pty-wrapper/dist/index.js";
     const ALLOWED_ENV_VARS = [
-      "__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS", "PNPM_STORE_DIR", "PNPM_HOME", "FORWARD_PREVIEW_ERRORS", "TERM", "PATH"
+      "__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS",
+      "PNPM_STORE_DIR",
+      "PNPM_HOME",
+      "FORWARD_PREVIEW_ERRORS",
+      "TERM",
+      "PATH",
     ];
 
     // Check if file exists using Node.js methods - more reliable across environments
@@ -1012,9 +1027,7 @@ export class ContainerServer {
 
     const mergedEnv = { ...process.env, ...(env || {}) };
     const filteredEnv = Object.fromEntries(
-      ALLOWED_ENV_VARS
-        .map(key => [key, mergedEnv[key]])
-        .filter(([, v]) => v)
+      ALLOWED_ENV_VARS.map((key) => [key, mergedEnv[key]]).filter(([, v]) => v),
     );
     const childProcess = spawn("node", ptyArgs, {
       cwd: this.config.workdirName,

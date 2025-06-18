@@ -1,3 +1,4 @@
+import { McpConfigurationManager } from "../../agent8/mcpConfigurationManager.js";
 import type { MachinePool } from "../../fly/machinePool.js";
 import type { GitLabIssueRepository } from "../repositories/gitlabIssueRepository.js";
 import type { GitLabIssue } from "../types/index.js";
@@ -8,7 +9,6 @@ import type { GitLabClient } from "./gitlabClient.js";
 import { GitLabLabelService } from "./gitlabLabelService.js";
 import { GitLabTaskDelegationService } from "./gitlabTaskDelegationService.js";
 import { McpConfigurationService } from "./mcpConfigurationService.js";
-import { McpConfigurationManager } from "../../agent8/mcpConfigurationManager.js";
 
 export class GitLabContainerService {
   private machinePool: MachinePool;
@@ -33,12 +33,14 @@ export class GitLabContainerService {
     // Initialize MCP Configuration Manager if GitLab client is available
     let mcpConfigManager: McpConfigurationManager | undefined;
     if (gitlabClient) {
-      console.log(`[GitLab-Container] Initializing MCP Configuration Manager...`);
+      console.log("[GitLab-Container] Initializing MCP Configuration Manager...");
       const mcpConfigService = new McpConfigurationService(gitlabClient);
       mcpConfigManager = new McpConfigurationManager(mcpConfigService);
-      console.log(`[GitLab-Container] ✅ MCP Configuration Manager initialized`);
+      console.log("[GitLab-Container] ✅ MCP Configuration Manager initialized");
     } else {
-      console.log(`[GitLab-Container] ⚠️ No GitLab client provided - MCP configuration will not be available`);
+      console.log(
+        "[GitLab-Container] ⚠️ No GitLab client provided - MCP configuration will not be available",
+      );
     }
 
     // Initialize GitLabTaskDelegationService with MCP Configuration Manager
@@ -49,7 +51,9 @@ export class GitLabContainerService {
       mcpConfigManager,
     );
 
-    console.log(`[GitLab-Container] TaskDelegationService initialized with MCP support: ${!!mcpConfigManager}`);
+    console.log(
+      `[GitLab-Container] TaskDelegationService initialized with MCP support: ${!!mcpConfigManager}`,
+    );
 
     // Initialize lifecycle management services if GitLab client is available
     if (gitlabClient) {
