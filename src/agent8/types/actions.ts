@@ -33,6 +33,7 @@ export interface ActionResult {
   success: boolean;
   output?: string;
   error?: string;
+  action: BoltAction;
 }
 
 export interface ActionCallbacks {

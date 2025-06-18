@@ -6,12 +6,21 @@ export interface CommentSection {
   content: string[];
 }
 
+export interface FailedActionDetail {
+  type: string;
+  error: string;
+  filePath?: string;
+  command?: string;
+  operation?: string;
+  content?: string;
+}
+
 export interface ErrorDetails {
   timestamp: string;
   errorMessage?: string;
   containerId?: string;
   commitHash?: string;
-  failedActions?: Array<{ error: string }>;
+  failedActions?: Array<FailedActionDetail>;
   successfulActions?: number;
   failedActionsCount?: number;
 }
@@ -132,21 +141,62 @@ export function createActionFailureComment(details: ErrorDetails): string {
         `- **Failed Actions**: ${details.failedActionsCount || 0}`,
       ],
     },
-    {
-      title: "Resolution Steps",
-      emoji: "🔧",
-      content: [
-        "1. **Review issue description** - Check if requirements are clear",
-        "2. **Verify dependencies** - Ensure all required files exist",
-        "3. **Retry task** - Change issue state back to **TODO** to retry",
-      ],
-    },
-    {
-      title: "Technical Details",
-      emoji: "📋",
-      content: [`- **Container ID**: \`${details.containerId || "unknown"}\``],
-    },
   ];
+
+  // Add detailed failed actions section if available
+  if (details.failedActions && details.failedActions.length > 0) {
+    const failedActionDetails: string[] = [];
+
+    details.failedActions.forEach((action, index) => {
+      failedActionDetails.push(`**${index + 1}. ${action.type.toUpperCase()} Action**`);
+
+      // Add action-specific details
+      if (action.type === "shell" && action.command) {
+        failedActionDetails.push(`   - **Command**: \`${action.command}\``);
+      } else if (action.type === "file" && action.filePath) {
+        failedActionDetails.push(`   - **File Path**: \`${action.filePath}\``);
+        if (action.operation) {
+          failedActionDetails.push(`   - **Operation**: ${action.operation}`);
+        }
+      } else if ((action.type === "start" || action.type === "restart") && action.command) {
+        failedActionDetails.push(`   - **Command**: \`${action.command}\``);
+      }
+
+      // Show content preview for context (limited to first 100 characters)
+      if (action.content && action.content.trim().length > 0) {
+        const contentPreview = action.content.length > 100
+          ? `${action.content.substring(0, 100)}...`
+          : action.content;
+        failedActionDetails.push(`   - **Content Preview**: \`${contentPreview}\``);
+      }
+
+      // Add error message
+      failedActionDetails.push(`   - **Error**: ${action.error}`);
+      failedActionDetails.push(""); // Empty line for separation
+    });
+
+    sections.push({
+      title: "Failed Actions Details",
+      emoji: "❌",
+      content: failedActionDetails,
+    });
+  }
+
+  sections.push({
+    title: "Resolution Steps",
+    emoji: "🔧",
+    content: [
+      "1. **Review issue description** - Check if requirements are clear",
+      "2. **Verify dependencies** - Ensure all required files exist",
+      "3. **Retry task** - Change issue state back to **TODO** to retry",
+    ],
+  });
+
+  sections.push({
+    title: "Technical Details",
+    emoji: "📋",
+    content: [`- **Container ID**: \`${details.containerId || "unknown"}\``],
+  });
 
   return createComment(
     "Agent8 Action Execution Failed",

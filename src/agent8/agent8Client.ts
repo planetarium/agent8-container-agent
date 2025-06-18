@@ -411,6 +411,7 @@ export class Agent8Client {
           const errorResult: ActionResult = {
             success: false,
             error: error instanceof Error ? error.message : String(error),
+            action: fullAction,
           };
           actionResults.push(errorResult);
           console.error(
@@ -695,13 +696,18 @@ export class Agent8Client {
     actionResults: ActionResult[],
   ): Promise<void> {
     try {
-      const failedActions = actionResults.filter((r) => !r.success);
-      const successfulActions = actionResults.filter((r) => r.success);
+      const failedActions = actionResults.filter((result) => !result.success);
+      const successfulActions = actionResults.filter((result) => result.success);
 
       const errorComment = this.generateErrorComment("action_failure", {
         timestamp: new Date().toISOString(),
-        failedActions: failedActions.map((r) => ({
-          error: r.error,
+        failedActions: failedActions.map((result) => ({
+          type: result.action.type,
+          error: result.error || "Unknown error",
+          filePath: result.action.filePath,
+          command: result.action.command,
+          operation: result.action.operation,
+          content: result.action.content,
         })),
         successfulActions: successfulActions.length,
         failedActionsCount: failedActions.length,

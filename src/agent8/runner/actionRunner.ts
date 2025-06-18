@@ -70,6 +70,9 @@ export class ActionRunner {
           throw new Error(`Unsupported action type: ${action.type}`);
       }
 
+      // Include original action in result for detailed reporting
+      result.action = action;
+
       this.callbacks.onComplete?.(action, result);
       return result;
     } catch (error) {
@@ -78,6 +81,7 @@ export class ActionRunner {
       const errorResult: ActionResult = {
         success: false,
         error: errorMessage,
+        action: action, // Include original action for detailed error reporting
       };
 
       this.callbacks.onError?.(action, errorMessage);
