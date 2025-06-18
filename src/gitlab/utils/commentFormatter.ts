@@ -20,7 +20,7 @@ export interface ErrorDetails {
   errorMessage?: string;
   containerId?: string;
   commitHash?: string;
-  failedActions?: Array<FailedActionDetail>;
+  failedActions?: FailedActionDetail[];
   successfulActions?: number;
   failedActionsCount?: number;
 }
@@ -164,9 +164,8 @@ export function createActionFailureComment(details: ErrorDetails): string {
 
       // Show content preview for context (limited to first 100 characters)
       if (action.content && action.content.trim().length > 0) {
-        const contentPreview = action.content.length > 100
-          ? `${action.content.substring(0, 100)}...`
-          : action.content;
+        const contentPreview =
+          action.content.length > 100 ? `${action.content.substring(0, 100)}...` : action.content;
         failedActionDetails.push(`   - **Content Preview**: \`${contentPreview}\``);
       }
 

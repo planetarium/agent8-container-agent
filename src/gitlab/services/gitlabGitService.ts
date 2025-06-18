@@ -1,4 +1,4 @@
-import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { chown, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import simpleGit, { type SimpleGit } from "simple-git";
 import type { GitLabInfo } from "../types/api.js";
@@ -11,7 +11,7 @@ import type {
   GitRepositoryInfo,
   MergeRequestCreationResult,
 } from "../types/git.js";
-import type { GitLabIssue } from "../types/index.js";
+import type { GitLabIssue, GitLabProject } from "../types/index.js";
 import type { GitLabClient } from "./gitlabClient.js";
 
 // Regular expression for masking Git clone URLs in logs
@@ -22,6 +22,7 @@ export class GitLabGitService {
   private workdir: string;
   private git: SimpleGit;
   private branch: string;
+  private readonly agentUid = 2000;
 
   constructor(gitlabClient: GitLabClient, workdir: string, branch: string) {
     this.gitlabClient = gitlabClient;
@@ -51,16 +52,17 @@ export class GitLabGitService {
       this.git = simpleGit(this.workdir);
       await this.cloneRepository(repoInfo.httpUrl);
 
-      // 4. Determine which branch to use as base
+      // 4. Configure Git settings and fix ownership before any git operations
+      await this.configureGitSettings();
+      await this.changeWorkingFilesOwnership();
+
+      // 5. Determine which branch to use as base
       const baseBranch = await this.determineBaseBranch(repoInfo.defaultBranch);
 
-      // 5. Create and checkout issue branch from determined base branch
+      // 6. Create and checkout issue branch from determined base branch
       const timestamp = Date.now();
       const branchName = `issue-${issueIid}-${timestamp}`;
       await this.createIssueBranch(branchName, baseBranch);
-
-      // 6. Configure Git settings
-      await this.configureGitSettings();
 
       // 7. Create Draft MR (with determined base branch as target)
       const mrResult = await this.createDraftMergeRequest({
@@ -99,12 +101,12 @@ export class GitLabGitService {
     }
   }
 
-  private extractRepositoryInfo(project: Record<string, unknown>): GitRepositoryInfo {
+  private extractRepositoryInfo(project: GitLabProject): GitRepositoryInfo {
     return {
-      httpUrl: project.http_url_to_repo as string,
-      sshUrl: project.ssh_url_to_repo as string,
-      defaultBranch: project.default_branch as string,
-      pathWithNamespace: project.path_with_namespace as string,
+      httpUrl: project.http_url_to_repo,
+      sshUrl: project.ssh_url_to_repo,
+      defaultBranch: project.default_branch,
+      pathWithNamespace: project.path_with_namespace,
     };
   }
 
@@ -156,9 +158,12 @@ export class GitLabGitService {
 
   private async configureGitSettings(): Promise<void> {
     try {
-      // Set basic git configuration for commits
+      // Set basic git configuration for commits with agent8 user info
+      await this.git.raw(["config", "--global", "--add", "safe.directory", this.workdir]);
       await this.git.addConfig("user.name", "Agent8 Container");
       await this.git.addConfig("user.email", "agent8@verse8.io");
+
+      console.log(`[GitLab-Git] Git settings configured with safe.directory: ${this.workdir}`);
     } catch (error) {
       console.warn(`[GitLab-Git] Failed to configure git settings: ${error}`);
     }
@@ -426,36 +431,38 @@ temp/
   /**
    * Execute commit and push operations sequentially
    */
-  async commitAndPush(commitMessage: string): Promise<GitCommitPushResult> {
-    const commitResult = await this.commitChanges(commitMessage);
+  async commitAndPush(message: string): Promise<GitCommitPushResult> {
+    try {
+      const commitResult = await this.commitChanges(message);
+      if (!commitResult.success) {
+        return {
+          success: false,
+          commitResult,
+          pushResult: { success: false, error: "Commit failed, push skipped" },
+          error: commitResult.error,
+        };
+      }
 
-    if (!commitResult.success) {
+      const pushResult = await this.pushToRemote();
+
+      // Change ownership to agent8 after git operations
+      await this.changeWorkingFilesOwnership();
+
+      return {
+        success: commitResult.success && pushResult.success,
+        commitResult,
+        pushResult,
+        error: pushResult.success ? undefined : pushResult.error,
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       return {
         success: false,
-        commitResult,
-        pushResult: { success: false, error: "Commit failed, skipping push" },
-        error: "Commit failed",
+        commitResult: { success: false, error: errorMessage },
+        pushResult: { success: false, error: "Push not attempted due to error" },
+        error: errorMessage,
       };
     }
-
-    if (commitResult.message === "No changes to commit") {
-      return {
-        success: true,
-        commitResult,
-        pushResult: { success: true, pushedBranch: "none" },
-      };
-    }
-
-    const pushResult = await this.pushToRemote();
-
-    const overallSuccess = commitResult.success && pushResult.success;
-
-    return {
-      success: overallSuccess,
-      commitResult,
-      pushResult,
-      ...(overallSuccess ? {} : { error: "Commit or push failed" }),
-    };
   }
 
   /**
@@ -494,6 +501,56 @@ temp/
         error,
       );
       return defaultBranch;
+    }
+  }
+
+  /**
+   * Optimized ownership change - exclude .git directory for better performance
+   * Only change ownership of working files, not git internals
+   */
+  private async changeWorkingFilesOwnership(): Promise<void> {
+    try {
+      console.log(
+        `[GitLab-Git] Changing working files ownership to agent8 (${this.agentUid}:${this.agentUid})`,
+      );
+
+      const changeOwnershipSelective = async (
+        dirPath: string,
+        excludeGitDir = true,
+      ): Promise<void> => {
+        try {
+          const entries = await readdir(dirPath);
+
+          for (const entry of entries) {
+            // Skip .git directory for performance - git internals can stay as root
+            if (excludeGitDir && entry === ".git") {
+              console.log("[GitLab-Git] Skipping .git directory (keeping root ownership)");
+              continue;
+            }
+
+            const fullPath = join(dirPath, entry);
+            const stats = await stat(fullPath);
+
+            // Change ownership of the file/directory
+            await chown(fullPath, this.agentUid, this.agentUid);
+
+            // Recursively process subdirectories
+            if (stats.isDirectory()) {
+              await changeOwnershipSelective(fullPath, false); // Don't exclude .git in subdirs
+            }
+          }
+
+          // Change ownership of the directory itself
+          await chown(dirPath, this.agentUid, this.agentUid);
+        } catch (error) {
+          console.warn(`[GitLab-Git] Failed to change ownership for ${dirPath}: ${error}`);
+        }
+      };
+
+      await changeOwnershipSelective(this.workdir);
+      console.log("[GitLab-Git] Working files ownership change completed");
+    } catch (error) {
+      console.warn(`[GitLab-Git] Failed to change working files ownership: ${error}`);
     }
   }
 }

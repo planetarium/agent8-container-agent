@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { chown, mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { ContainerServer } from "../../server.ts";
 import { ensureSafePath } from "../../server.ts";
@@ -15,11 +15,13 @@ export class ActionRunner {
   private readonly containerServer: ContainerServer;
   private readonly callbacks: ActionCallbacks;
   private readonly workdir: string;
+  private readonly agentUid: number;
 
   constructor(containerServer: ContainerServer, workdir: string, callbacks: ActionCallbacks = {}) {
     this.containerServer = containerServer;
     this.workdir = workdir;
     this.callbacks = callbacks;
+    this.agentUid = 2000;
   }
 
   /**
@@ -114,6 +116,8 @@ export class ActionRunner {
 
           await writeFile(safePath, content, { encoding: "utf-8" });
 
+          await chown(safePath, this.agentUid, this.agentUid);
+
           return {
             success: true,
             output: `File ${operation === "create" ? "created" : "updated"}: ${filePath}`,
@@ -176,6 +180,8 @@ export class ActionRunner {
         cwd: this.workdir,
         stdio: ["pipe", "pipe", "pipe"],
         shell: true,
+        uid: this.agentUid,
+        gid: this.agentUid,
       });
 
       let stdout = "";
