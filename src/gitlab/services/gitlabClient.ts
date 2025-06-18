@@ -356,4 +356,65 @@ export class GitLabClient {
       throw error;
     }
   }
+
+  async updateMergeRequest(
+    projectId: number,
+    mergeRequestIid: number,
+    options: {
+      title?: string;
+      description?: string;
+      draft?: boolean;
+    },
+  ): Promise<GitLabMergeRequest> {
+    try {
+      console.log(`[GitLab-API] Updating merge request !${mergeRequestIid}`);
+
+      const mergeRequest = await this.gitlab.MergeRequests.edit(
+        projectId,
+        mergeRequestIid,
+        options,
+      );
+
+      console.log(`[GitLab-API] Merge request !${mergeRequestIid} updated successfully`);
+      return mergeRequest as GitLabMergeRequest;
+    } catch (error) {
+      console.error(`[GitLab-API] Failed to update merge request !${mergeRequestIid}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Remove draft status from merge request by updating the title
+   */
+  async markMergeRequestReady(
+    projectId: number,
+    mergeRequestIid: number,
+  ): Promise<GitLabMergeRequest> {
+    try {
+      // First get the current MR to check its title
+      const currentMR = await this.gitlab.MergeRequests.show(projectId, mergeRequestIid);
+
+      // Remove "Draft:" prefix from title if it exists
+      const currentTitle = currentMR.title;
+      const readyTitle = currentTitle.replace(/^Draft:\s*/i, "");
+
+      if (currentTitle === readyTitle) {
+        console.log(`[GitLab-API] MR !${mergeRequestIid} is already ready (no Draft prefix)`);
+        return currentMR as GitLabMergeRequest;
+      }
+
+      console.log(`[GitLab-API] Marking MR !${mergeRequestIid} as ready for review`);
+      console.log(`[GitLab-API] Title: "${currentTitle}" → "${readyTitle}"`);
+
+      const updatedMR = await this.gitlab.MergeRequests.edit(projectId, mergeRequestIid, {
+        title: readyTitle,
+      });
+
+      console.log(`[GitLab-API] MR !${mergeRequestIid} marked as ready for review`);
+      return updatedMR as GitLabMergeRequest;
+    } catch (error) {
+      console.error(`[GitLab-API] Failed to mark MR !${mergeRequestIid} as ready:`, error);
+      throw error;
+    }
+  }
 }

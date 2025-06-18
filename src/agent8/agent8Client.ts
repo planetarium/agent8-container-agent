@@ -6,7 +6,11 @@ import { GitLabClient } from "../gitlab/services/gitlabClient.ts";
 import { GitLabGitService } from "../gitlab/services/gitlabGitService.ts";
 import { GitLabLabelService } from "../gitlab/services/gitlabLabelService.ts";
 import type { GitLabInfo } from "../gitlab/types/api.ts";
-import type { GitCommitPushResult, GitCommitResult } from "../gitlab/types/git.ts";
+import type {
+  GitCheckoutResult,
+  GitCommitPushResult,
+  GitCommitResult,
+} from "../gitlab/types/git.ts";
 import type { GitLabIssue, IssueState } from "../gitlab/types/index.ts";
 import type { LabelChangeEvent } from "../gitlab/types/lifecycle.ts";
 import {
@@ -21,12 +25,12 @@ import { IssueLifecycleWorkflow } from "../gitlab/workflows/issueLifecycleWorkfl
 import type { IssueCompletionEvent } from "../gitlab/workflows/issueLifecycleWorkflow.ts";
 import type { ContainerServer } from "../server.ts";
 
-import { parseMcpConfiguration } from "./configurationFormatter.js";
+import { parseMcpConfiguration } from "./configurationFormatter.ts";
 import type { ActionCallbacks, ActionResult, BoltAction, ParserCallbacks } from "./index.ts";
 import { ActionRunner, StreamingMessageParser } from "./index.ts";
-import type { FileMap } from "./types/fileMap.js";
-import { FileMapBuilder } from "./utils/fileMapBuilder.js";
-import { convertToUIMessages } from "./utils/messageUtils.js";
+import type { FileMap } from "./types/fileMap.ts";
+import { FileMapBuilder } from "./utils/fileMapBuilder.ts";
+import { convertToUIMessages } from "./utils/messageUtils.ts";
 
 interface TaskResponseData {
   taskId: string;
@@ -90,6 +94,7 @@ interface Task {
   result?: any;
   error?: string;
   progress?: number;
+  gitCheckoutResult?: GitCheckoutResult;
 }
 
 export class Agent8Client {
@@ -160,13 +165,17 @@ export class Agent8Client {
     }
     await this.startIssueMonitoring(request.gitlabInfo);
 
+    let gitCheckoutResult: GitCheckoutResult | undefined;
+
     try {
-      const gitResult = await this.gitlabGitService.checkoutRepositoryForIssue(
+      gitCheckoutResult = await this.gitlabGitService.checkoutRepositoryForIssue(
         request.gitlabInfo.projectId,
         request.gitlabInfo.issueIid,
       );
-      if (gitResult.createdMergeRequest) {
-        console.info(`[Agent8] Git checkout successful: ${gitResult.createdMergeRequest}`);
+      if (gitCheckoutResult.createdMergeRequest) {
+        console.info(
+          `[Agent8] Draft MR created: !${gitCheckoutResult.createdMergeRequest.iid} (${gitCheckoutResult.createdMergeRequest.web_url})`,
+        );
       }
     } catch (error) {
       console.error("[Agent8] Git checkout failed:", error);
@@ -199,6 +208,7 @@ export class Agent8Client {
       status: "pending",
       createdAt: new Date(),
       progress: 0,
+      gitCheckoutResult, // Store the git checkout result
     };
 
     this.tasks.set(taskId, task);
@@ -650,39 +660,57 @@ export class Agent8Client {
   }
 
   /**
-   * Execute automatic commit and push after successful action completion
+   * Perform automatic commit and push after successful task completion
+   * Also marks the associated MR as ready for review
    */
   private async performAutoCommitPush(taskId: string, gitlabInfo: GitLabInfo): Promise<void> {
     try {
+      if (!this.gitlabGitService) {
+        console.log(
+          `[Agent8] Task ${taskId} - GitLab Git service not available, skipping auto commit/push`,
+        );
+        return;
+      }
+
+      console.log(`[Agent8] Task ${taskId} - Starting automatic commit and push`);
+
+      // Generate commit message from issue information
       const commitMessage = this.generateCommitMessage(gitlabInfo);
 
-      const commitPushResult = await this.gitlabGitService.commitAndPush(commitMessage);
+      // Get MR information from checkout result if available
+      const task = this.tasks.get(taskId);
+      const checkoutResult = task?.gitCheckoutResult;
+      const mergeRequest = checkoutResult?.createdMergeRequest;
 
-      if (commitPushResult.success) {
-        // Handle task success: add success comment and update issue status
-        await this.handleTaskSuccess(taskId, gitlabInfo, commitPushResult);
-      } else {
-        // Determine the specific failure type for better error handling
-        if (commitPushResult.commitResult.success && !commitPushResult.pushResult.success) {
-          // Commit succeeded but push failed
-          const pushError = new Error(`Push failed: ${commitPushResult.pushResult.error}`);
-          await this.handleCommitPushFailure(
-            taskId,
-            gitlabInfo,
-            pushError,
-            commitPushResult.commitResult,
+      // Perform commit and push with auto-mark-ready option
+      const result = await this.gitlabGitService.commitAndPush(commitMessage, {
+        autoMarkReady: true,
+        projectId: mergeRequest ? gitlabInfo.projectId : undefined,
+        mergeRequestIid: mergeRequest ? mergeRequest.iid : undefined,
+      });
+
+      if (result.success) {
+        console.log(`[Agent8] Task ${taskId} - Commit and push completed successfully`);
+
+        if (mergeRequest) {
+          console.log(
+            `[Agent8] Task ${taskId} - MR !${mergeRequest.iid} marked as ready for review`,
           );
-        } else {
-          // Commit failed
-          const commitError = new Error(
-            `Commit failed: ${commitPushResult.commitResult.error || commitPushResult.error}`,
-          );
-          await this.handleCommitPushFailure(taskId, gitlabInfo, commitError);
         }
-        return; // Don't throw, we've handled the error
+
+        // Add success comment to GitLab issue
+        await this.handleTaskSuccess(taskId, gitlabInfo, result);
+      } else {
+        console.error(`[Agent8] Task ${taskId} - Commit/push failed: ${result.error}`);
+        await this.handleCommitPushFailure(
+          taskId,
+          gitlabInfo,
+          new Error(result.error || "Unknown error"),
+          result.commitResult,
+        );
       }
     } catch (error) {
-      console.error(`[Agent8] Task ${taskId} - Auto-commit/push failed:`, error);
+      console.error(`[Agent8] Task ${taskId} - Auto commit/push failed:`, error);
       await this.handleCommitPushFailure(taskId, gitlabInfo, error as Error);
     }
   }

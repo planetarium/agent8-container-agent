@@ -430,8 +430,16 @@ temp/
 
   /**
    * Execute commit and push operations sequentially
+   * If MR exists and push succeeds, automatically mark MR as ready for review
    */
-  async commitAndPush(message: string): Promise<GitCommitPushResult> {
+  async commitAndPush(
+    message: string,
+    options?: {
+      autoMarkReady?: boolean;
+      projectId?: number;
+      mergeRequestIid?: number;
+    },
+  ): Promise<GitCommitPushResult> {
     try {
       const commitResult = await this.commitChanges(message);
       if (!commitResult.success) {
@@ -448,6 +456,23 @@ temp/
       // Change ownership to agent8 after git operations
       await this.changeWorkingFilesOwnership();
 
+      // Auto-mark MR as ready if push succeeded and options provided
+      if (
+        pushResult.success &&
+        options?.autoMarkReady &&
+        options.projectId &&
+        options.mergeRequestIid
+      ) {
+        try {
+          await this.markMergeRequestReady(options.projectId, options.mergeRequestIid);
+        } catch (error) {
+          console.warn(
+            `[GitLab-Git] Failed to mark MR as ready: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          // Don't fail the entire operation if MR update fails
+        }
+      }
+
       return {
         success: commitResult.success && pushResult.success,
         commitResult,
@@ -462,6 +487,21 @@ temp/
         pushResult: { success: false, error: "Push not attempted due to error" },
         error: errorMessage,
       };
+    }
+  }
+
+  /**
+   * Mark the associated merge request as ready for review
+   */
+  private async markMergeRequestReady(projectId: number, mergeRequestIid: number): Promise<void> {
+    try {
+      console.log(`[GitLab-Git] Marking MR !${mergeRequestIid} as ready for review`);
+      await this.gitlabClient.markMergeRequestReady(projectId, mergeRequestIid);
+      console.log(`[GitLab-Git] MR !${mergeRequestIid} marked as ready for review`);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(`[GitLab-Git] Failed to mark MR as ready: ${errorMessage}`);
+      throw error;
     }
   }
 
