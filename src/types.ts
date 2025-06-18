@@ -150,3 +150,11 @@ export interface ProxyData {
 export interface DirectConnectionData {
   wsId: string;
 }
+
+// MCP metadata types
+export type {
+  McpServerConfig,
+  McpToolMetadata,
+  McpServerConfigExtended,
+  McpTransferData,
+} from "./types/mcpMetadata.js";

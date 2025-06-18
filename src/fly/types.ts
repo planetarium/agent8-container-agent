@@ -59,4 +59,4 @@ export interface FlyConfig {
   appName: string;
   imageRef?: string;
   baseUrl?: string;
-} 
+}

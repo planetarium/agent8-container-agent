@@ -1,5 +1,5 @@
-const fs = require('fs');
-const path = require('path');
+const fs = require("node:fs");
+const path = require("node:path");
 
 // Initialize result object
 const mergedPackage = {
@@ -11,37 +11,40 @@ const mergedPackage = {
     dev: "vite",
     build: "vite build",
     lint: "eslint .",
-    preview: "vite preview"
+    preview: "vite preview",
   },
   dependencies: {},
-  devDependencies: {}
+  devDependencies: {},
 };
 
 // Root directory path
 const rootDir = __dirname;
 
 // Get all directories
-const directories = fs.readdirSync(rootDir, { withFileTypes: true })
-  .filter(dirent => dirent.isDirectory() && !dirent.name.startsWith('.'))
-  .map(dirent => dirent.name);
-
-console.log('Found project directories:', directories);
+const directories = fs
+  .readdirSync(rootDir, { withFileTypes: true })
+  .filter((dirent) => dirent.isDirectory() && !dirent.name.startsWith("."))
+  .map((dirent) => dirent.name);
 
 // Find and merge package.json files from each directory
-directories.forEach(dir => {
-  const packagePath = path.join(rootDir, dir, 'package.json');
+directories.forEach((dir) => {
+  const packagePath = path.join(rootDir, dir, "package.json");
 
   // Check if package.json exists
   if (fs.existsSync(packagePath)) {
     try {
-      const packageData = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
-      console.log(`Processing: ${dir}/package.json`);
+      const packageData = JSON.parse(fs.readFileSync(packagePath, "utf8"));
 
       // Merge dependencies
       if (packageData.dependencies) {
-        Object.keys(packageData.dependencies).forEach(dep => {
-          if (!mergedPackage.dependencies[dep] ||
-              compareVersions(packageData.dependencies[dep], mergedPackage.dependencies[dep])) {
+        Object.keys(packageData.dependencies).forEach((dep) => {
+          if (
+            !mergedPackage.dependencies[dep] ||
+            compareVersions(
+              packageData.dependencies[dep],
+              mergedPackage.dependencies[dep],
+            )
+          ) {
             mergedPackage.dependencies[dep] = packageData.dependencies[dep];
           }
         });
@@ -49,10 +52,16 @@ directories.forEach(dir => {
 
       // Merge devDependencies
       if (packageData.devDependencies) {
-        Object.keys(packageData.devDependencies).forEach(dep => {
-          if (!mergedPackage.devDependencies[dep] ||
-              compareVersions(packageData.devDependencies[dep], mergedPackage.devDependencies[dep])) {
-            mergedPackage.devDependencies[dep] = packageData.devDependencies[dep];
+        Object.keys(packageData.devDependencies).forEach((dep) => {
+          if (
+            !mergedPackage.devDependencies[dep] ||
+            compareVersions(
+              packageData.devDependencies[dep],
+              mergedPackage.devDependencies[dep],
+            )
+          ) {
+            mergedPackage.devDependencies[dep] =
+              packageData.devDependencies[dep];
           }
         });
       }
@@ -65,15 +74,17 @@ directories.forEach(dir => {
 // Version comparison function (check if there's a higher version or range)
 function compareVersions(newVersion, existingVersion) {
   // If no existing version, use new version
-  if (!existingVersion) return true;
+  if (!existingVersion) {
+    return true;
+  }
 
   // Extract version numbers from strings (remove ^, ~, >=, etc.)
-  const cleanNewVersion = newVersion.replace(/[^0-9.]/g, '');
-  const cleanExistingVersion = existingVersion.replace(/[^0-9.]/g, '');
+  const cleanNewVersion = newVersion.replace(/[^0-9.]/g, "");
+  const cleanExistingVersion = existingVersion.replace(/[^0-9.]/g, "");
 
   // Split version strings into parts
-  const newParts = cleanNewVersion.split('.').map(Number);
-  const existingParts = cleanExistingVersion.split('.').map(Number);
+  const newParts = cleanNewVersion.split(".").map(Number);
+  const existingParts = cleanExistingVersion.split(".").map(Number);
 
   // Compare version parts
   const maxLength = Math.max(newParts.length, existingParts.length);
@@ -83,7 +94,8 @@ function compareVersions(newVersion, existingVersion) {
 
     if (newPart > existingPart) {
       return true; // New version is higher
-    } else if (newPart < existingPart) {
+    }
+    if (newPart < existingPart) {
       return false; // Existing version is higher
     }
   }
@@ -94,8 +106,6 @@ function compareVersions(newVersion, existingVersion) {
 
 // Save result to merged-package.json file
 fs.writeFileSync(
-  path.join(rootDir, 'package.json'),
-  JSON.stringify(mergedPackage, null, 2)
+  path.join(rootDir, "package.json"),
+  JSON.stringify(mergedPackage, null, 2),
 );
-
-console.log('All dependencies have been merged. Please check the package.json file.');
