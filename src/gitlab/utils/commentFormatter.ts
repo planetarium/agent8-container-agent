@@ -280,6 +280,51 @@ export function createPushFailureComment(details: ErrorDetails): string {
 }
 
 /**
+ * Generate error comment for test failures
+ */
+export function createTestFailureComment(details: ErrorDetails, testType: string): string {
+  const testTypeDisplayName =
+    {
+      install: "Package Installation (pnpm install)",
+      build: "Build Process (pnpm build)",
+      test_execution: "Test Execution",
+    }[testType] || testType;
+
+  const sections: CommentSection[] = [
+    {
+      title: "Pre-commit Test Failed",
+      content: [
+        "- **Error Type**: Pre-commit test failure",
+        `- **Failed Test**: ${testTypeDisplayName}`,
+        `- **Timestamp**: ${details.timestamp}`,
+      ],
+    },
+    {
+      title: "Error Details",
+      emoji: "❗",
+      content: [`- **Error Message**: ${details.errorMessage || "Unknown error"}`],
+    },
+    {
+      title: "Resolution Steps",
+      emoji: "🔧",
+      content: [
+        "1. **Check dependencies** - Verify package.json and lockfiles are correct",
+        "2. **Review build configuration** - Ensure build scripts and configs are valid",
+        "3. **Fix compilation errors** - Address any TypeScript/build issues",
+        "4. **Retry task** - Change issue state back to **TODO** to retry",
+      ],
+    },
+    {
+      title: "Technical Details",
+      emoji: "📋",
+      content: [`- **Container ID**: \`${details.containerId || "unknown"}\``],
+    },
+  ];
+
+  return createComment("Pre-commit Test Failed", "❌", sections, "*Agent8 automatic error report*");
+}
+
+/**
  * Generate status update comment for lifecycle changes
  */
 export function createStatusUpdateComment(

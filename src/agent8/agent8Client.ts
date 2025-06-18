@@ -19,6 +19,7 @@ import {
   createCommitFailureComment,
   createPushFailureComment,
   createSuccessComment,
+  createTestFailureComment,
 } from "../gitlab/utils/commentFormatter.ts";
 import type { ErrorDetails, SuccessDetails } from "../gitlab/utils/commentFormatter.ts";
 import { IssueLifecycleWorkflow } from "../gitlab/workflows/issueLifecycleWorkflow.ts";
@@ -660,7 +661,97 @@ export class Agent8Client {
   }
 
   /**
-   * Perform automatic commit and push after successful task completion
+   * Perform pre-commit tests before committing changes
+   */
+  private async performPreCommitTests(taskId: string, gitlabInfo: GitLabInfo): Promise<boolean> {
+    try {
+      console.log(`[Agent8] Task ${taskId} - Running pre-commit tests`);
+
+      // Test 1: pnpm install
+      const installResult = await this.actionRunner.executeAction({
+        type: "shell",
+        content: "pnpm install",
+        command: "pnpm install",
+      });
+
+      if (!installResult.success) {
+        console.error(`[Agent8] Task ${taskId} - pnpm install failed: ${installResult.error}`);
+        await this.handleTestFailure(
+          taskId,
+          gitlabInfo,
+          "install",
+          installResult.error || "Unknown error",
+        );
+        return false;
+      }
+
+      // Test 2: Build
+      const buildResult = await this.actionRunner.executeAction({
+        type: "shell",
+        content: "pnpm build",
+        command: "pnpm build",
+      });
+
+      if (!buildResult.success) {
+        console.error(`[Agent8] Task ${taskId} - Build failed: ${buildResult.error}`);
+        await this.handleTestFailure(
+          taskId,
+          gitlabInfo,
+          "build",
+          buildResult.error || "Unknown error",
+        );
+        return false;
+      }
+
+      console.log(`[Agent8] Task ${taskId} - Pre-commit tests passed`);
+      return true;
+    } catch (error) {
+      console.error(`[Agent8] Task ${taskId} - Pre-commit tests failed:`, error);
+      await this.handleTestFailure(
+        taskId,
+        gitlabInfo,
+        "test_execution",
+        error instanceof Error ? error.message : String(error),
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Handle test failure by adding comment and updating issue status
+   */
+  private async handleTestFailure(
+    taskId: string,
+    gitlabInfo: GitLabInfo,
+    testType: "install" | "build" | "test_execution",
+    errorMessage: string,
+  ): Promise<void> {
+    try {
+      const errorComment = this.generateErrorComment("test_failure" as any, {
+        timestamp: new Date().toISOString(),
+        errorMessage,
+        testType,
+        containerId: gitlabInfo.containerId,
+      });
+
+      // Add error comment to GitLab issue
+      await this.addIssueErrorComment(gitlabInfo, errorComment);
+
+      // Update issue status to REJECT
+      const issue = await this.getGitLabIssue(gitlabInfo.projectId, gitlabInfo.issueIid);
+      if (issue) {
+        await this.lifecycleWorkflow.onTaskExecutionFailure(
+          issue,
+          new Error(`Pre-commit test failed (${testType}): ${errorMessage}`),
+        );
+      }
+    } catch (error) {
+      console.error(`[Agent8] Task ${taskId} - Failed to handle test failure:`, error);
+    }
+  }
+
+  /**
+   * Perform automatic tests, commit and push after successful task completion
    * Also marks the associated MR as ready for review
    */
   private async performAutoCommitPush(taskId: string, gitlabInfo: GitLabInfo): Promise<void> {
@@ -669,6 +760,13 @@ export class Agent8Client {
         console.log(
           `[Agent8] Task ${taskId} - GitLab Git service not available, skipping auto commit/push`,
         );
+        return;
+      }
+
+      // Step 1: Run pre-commit tests
+      const testsPass = await this.performPreCommitTests(taskId, gitlabInfo);
+      if (!testsPass) {
+        console.error(`[Agent8] Task ${taskId} - Pre-commit tests failed, aborting commit/push`);
         return;
       }
 
@@ -812,7 +910,7 @@ export class Agent8Client {
    * Generate error comment templates for different failure types
    */
   private generateErrorComment(
-    errorType: "action_failure" | "commit_failure" | "push_failure",
+    errorType: "action_failure" | "commit_failure" | "push_failure" | "test_failure",
     details: any,
   ): string {
     const timestamp = new Date().toISOString();
@@ -833,6 +931,8 @@ export class Agent8Client {
         return createCommitFailureComment(errorDetails);
       case "push_failure":
         return createPushFailureComment(errorDetails);
+      case "test_failure":
+        return createTestFailureComment(errorDetails, details.testType);
       default:
         return createComment(
           "Unknown Error",
