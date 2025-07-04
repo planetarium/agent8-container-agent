@@ -1079,6 +1079,7 @@ export class ContainerServer {
     const watcher = chokidar.watch(this.config.workdirName, {
       persistent: true,
       ignoreInitial: options.ignoreInitial,
+      usePolling: true,
       ignored: (path) => {
         if (path === this.config.workdirName) {
           return false;
