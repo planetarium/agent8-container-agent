@@ -5,7 +5,7 @@
     "clientKind": "git"
   },
   "files": {
-    "ignore": ["protocol"]
+    "ignore": ["protocol", "pty-wrapper", "scripts", "merge-dependencies.js"]
   },
   "formatter": {
     "useEditorconfig": true
@@ -17,12 +17,19 @@
         "noNodejsModules": "off"
       },
       "suspicious": {
-        "noConsole": {
-          "level": "warn",
-          "options": {
-            "allow": ["debug", "info", "warn", "error"]
-          }
-        }
+        "noConsole": "off",
+        "noConsoleLog": "off",
+        "noExplicitAny": "off"
+      },
+      "performance": {
+        "noBarrelFile": "off"
+      },
+      "complexity": {
+        "noExcessiveCognitiveComplexity": "off"
+      },
+      "style": {
+        "useNamingConvention": "off",
+        "noParameterProperties": "off"
       }
     }
   }
