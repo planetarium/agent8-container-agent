@@ -105,8 +105,8 @@ export class ContainerServer {
   private readonly connectionLastActivityTime: Map<string, number>;
   private machineLastActivityTime: number | null = null;
   private cleanupInterval: NodeJS.Timeout | null = null;
-  private readonly connectionTestInterval = 60000; // 1 minute
-  private readonly machineDestroyInterval = 300000; // 5 minutes
+  private readonly connectionTestInterval = 5 * 60 * 1000; // 5 minutes
+  private readonly machineDestroyInterval = 10 * 60 * 1000; // 10 minutes
   private machinePool: MachinePool | null = null;
   private latestOpenPort: number | null = null;
   private agentUid: number;
