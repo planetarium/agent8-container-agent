@@ -493,6 +493,16 @@ export class ContainerServer {
       }
       }),
       websocket: {
+        idleTimeout: this.connectionTestInterval / 1000, // 5 minutes
+        ping: (ws: ServerWebSocket<WebSocketData>, data: Buffer) => {
+          console.log(`${new Date().toISOString()}: WebSocket Ping sent, data: ${data.length} bytes`);
+        },
+        pong: (ws: ServerWebSocket<WebSocketData>, data: Buffer) => {
+          if (isDirectConnection(ws.data)) {
+            this.connectionLastActivityTime.set(ws.data.wsId, Date.now());
+          }
+          console.log(`${new Date().toISOString()}: WebSocket Pong received, data: ${data.length} bytes`);
+        },
         message: (ws: ServerWebSocket<WebSocketData>, message) => {
           if (isDirectConnection(ws.data)) {
             this.handleMessage(ws, message);
@@ -570,7 +580,7 @@ export class ContainerServer {
     if (isDirectConnection(ws.data)) {
       this.connectionLastActivityTime.set(ws.data.wsId, Date.now());
     }
-    console.debug(message);
+    console.debug(`${new Date().toISOString()}: ${message}`);
 
     try {
       const { id, operation } = JSON.parse(message.toString()) as ContainerRequest;
