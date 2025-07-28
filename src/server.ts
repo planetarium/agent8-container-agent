@@ -105,8 +105,8 @@ export class ContainerServer {
   private readonly connectionLastActivityTime: Map<string, number>;
   private machineLastActivityTime: number | null = null;
   private cleanupInterval: NodeJS.Timeout | null = null;
-  private readonly connectionTestInterval = 60000; // 1 minute
-  private readonly machineDestroyInterval = 300000; // 5 minutes
+  private readonly connectionTestInterval = 5 * 60 * 1000; // 5 minutes
+  private readonly machineDestroyInterval = 10 * 60 * 1000; // 10 minutes
   private machinePool: MachinePool | null = null;
   private latestOpenPort: number | null = null;
   private agentUid: number;
@@ -493,6 +493,16 @@ export class ContainerServer {
       }
       }),
       websocket: {
+        idleTimeout: this.connectionTestInterval / 1000, // 5 minutes
+        ping: (ws: ServerWebSocket<WebSocketData>, data: Buffer) => {
+          console.log(`${new Date().toISOString()}: WebSocket Ping sent, data: ${data.length} bytes`);
+        },
+        pong: (ws: ServerWebSocket<WebSocketData>, data: Buffer) => {
+          if (isDirectConnection(ws.data)) {
+            this.connectionLastActivityTime.set(ws.data.wsId, Date.now());
+          }
+          console.log(`${new Date().toISOString()}: WebSocket Pong received, data: ${data.length} bytes`);
+        },
         message: (ws: ServerWebSocket<WebSocketData>, message) => {
           if (isDirectConnection(ws.data)) {
             this.handleMessage(ws, message);
@@ -570,7 +580,7 @@ export class ContainerServer {
     if (isDirectConnection(ws.data)) {
       this.connectionLastActivityTime.set(ws.data.wsId, Date.now());
     }
-    console.debug(message);
+    console.debug(`${new Date().toISOString()}: ${message}`);
 
     try {
       const { id, operation } = JSON.parse(message.toString()) as ContainerRequest;
