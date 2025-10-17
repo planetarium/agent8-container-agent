@@ -124,7 +124,11 @@ export class ContainerAgentImpl implements Container {
         const path = join(basePath, name);
 
         if ("file" in node) {
-          await this.fs.writeFile(path, node.file.contents);
+          const content: string = node.file.isBinary && Array.isArray(node.file.contents)
+            ? Buffer.from(node.file.contents).toString('binary')
+            : node.file.contents as string;
+
+          await this.fs.writeFile(path, content);
         } else if ("directory" in node) {
           await this.fs.mkdir(path, { recursive: true });
           await writeFiles(node.directory, path);

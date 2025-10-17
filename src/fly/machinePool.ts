@@ -60,7 +60,7 @@ export class MachinePool {
           where: { deleted: false },
         });
         const dbMachineIds = new Set(machines.map((m: { machine_id: string }) => m.machine_id));
-        
+
         // 3. DB에는 있는데 실제로 없는 머신 → soft delete
         const machinesToDelete = machines.filter((m: { machine_id: string }) => !flyMachineIds.has(m.machine_id));
         if (machinesToDelete.length > 0) {

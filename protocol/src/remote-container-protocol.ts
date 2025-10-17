@@ -186,7 +186,9 @@ export interface ShellSession {
 
 export interface FileNode {
   file: {
-    contents: string;
+    contents: string | number[];
+    isBinary?: boolean;
+    mimeType?: string;
   };
 }
 

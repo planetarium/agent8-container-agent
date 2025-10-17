@@ -58,7 +58,9 @@ export interface Container {
 // File system types
 export interface FileNode {
   file: {
-    contents: string;
+    contents: string | number[];
+    isBinary?: boolean;
+    mimeType?: string;
   };
 }
 
