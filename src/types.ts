@@ -32,7 +32,7 @@ export interface PreviewMessage {
 // File system interface
 export interface FileSystem {
   readFile(path: string, options?: { encoding?: string }): Promise<string | Buffer>;
-  writeFile(path: string, content: string, options?: { encoding?: string }): Promise<void>;
+  writeFile(path: string, content: string | Buffer, options?: { encoding?: string }): Promise<void>;
   rm(path: string, options?: { recursive?: boolean }): Promise<void>;
   readdir(path: string): Promise<string[]>;
   mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
@@ -56,6 +56,14 @@ export interface Container {
 }
 
 // File system types
+/**
+ * Represents a file node in the file system tree.
+ *
+ * @property file - File metadata and contents
+ * @property file.contents - File content as either a string for text files or a number array (byte array) for binary files
+ * @property file.isBinary - Flag indicating whether the file is binary. When true, contents should be a number array representing bytes
+ * @property file.mimeType - Optional MIME type of the file
+ */
 export interface FileNode {
   file: {
     contents: string | number[];
