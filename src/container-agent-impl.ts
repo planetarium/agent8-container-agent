@@ -44,7 +44,7 @@ export class ContainerAgentImpl implements Container {
         const fullPath = join(this.workdir, path);
         return fs.readFile(fullPath, options);
       },
-      writeFile: async (path: string, content: string, options?: { encoding?: BufferEncoding }) => {
+      writeFile: async (path: string, content: string | Buffer, options?: { encoding?: BufferEncoding }) => {
         const fullPath = join(this.workdir, path);
         await fs.writeFile(fullPath, content, options);
       },
@@ -124,7 +124,11 @@ export class ContainerAgentImpl implements Container {
         const path = join(basePath, name);
 
         if ("file" in node) {
-          await this.fs.writeFile(path, node.file.contents);
+          const content: string | Buffer = node.file.isBinary && Array.isArray(node.file.contents)
+            ? Buffer.from(node.file.contents)
+            : typeof node.file.contents === 'string' ? node.file.contents : Buffer.from(node.file.contents);
+
+          await this.fs.writeFile(path, content);
         } else if ("directory" in node) {
           await this.fs.mkdir(path, { recursive: true });
           await writeFiles(node.directory, path);
