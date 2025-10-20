@@ -184,6 +184,15 @@ export interface ShellSession {
   waitTillOscCode?(code: string): Promise<{ output: string; exitCode: number }>;
 }
 
+/**
+ * Represents a file node in the file system tree.
+ *
+ * @property file.contents - File content as string (text) or number[] (binary bytes)
+ * @property file.isBinary - Flag indicating binary content
+ * @property file.mimeType - Optional MIME type
+ *
+ * @note Uses number[] for binary content to ensure JSON serialization compatibility
+ */
 export interface FileNode {
   file: {
     contents: string | number[];

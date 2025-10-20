@@ -63,6 +63,9 @@ export interface Container {
  * @property file.contents - File content as either a string for text files or a number array (byte array) for binary files
  * @property file.isBinary - Flag indicating whether the file is binary. When true, contents should be a number array representing bytes
  * @property file.mimeType - Optional MIME type of the file
+ *
+ * @note Uses number[] instead of Uint8Array for binary content to ensure JSON serialization compatibility
+ * when transmitting over WebSocket connections.
  */
 export interface FileNode {
   file: {
