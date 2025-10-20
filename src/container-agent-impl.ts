@@ -126,7 +126,7 @@ export class ContainerAgentImpl implements Container {
         if ("file" in node) {
           const content: string | Buffer = node.file.isBinary && Array.isArray(node.file.contents)
             ? Buffer.from(node.file.contents)
-            : node.file.contents as string;
+            : typeof node.file.contents === 'string' ? node.file.contents : Buffer.from(node.file.contents);
 
           await this.fs.writeFile(path, content);
         } else if ("directory" in node) {

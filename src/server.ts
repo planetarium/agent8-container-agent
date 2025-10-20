@@ -1258,7 +1258,7 @@ async function mount(mountPath: string, tree: FileSystemTree, agentUid: number) 
     if ("file" in item) {
       const content: string | Buffer = item.file.isBinary && Array.isArray(item.file.contents)
         ? Buffer.from(item.file.contents)
-        : item.file.contents as string;
+        : typeof item.file.contents === 'string' ? item.file.contents : Buffer.from(item.file.contents);
 
       await writeFile(fullPath, content);
     } else if ("directory" in item) {
