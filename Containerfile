@@ -1,6 +1,9 @@
-FROM oven/bun:1.2.10 AS builder
+FROM oven/bun:1.2.20 AS builder
 
 WORKDIR /app
+
+# Install openssl to fix Prisma version detection
+RUN apt-get update && apt-get install -y openssl && apt-get clean
 
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
@@ -35,7 +38,7 @@ ENV PNPM_HOME=/pnpm \
 
 RUN pnpm update
 
-FROM oven/bun:1.2.10-slim
+FROM oven/bun:1.2.20-slim
 
 # install zsh and build dependencies for node-pty
 RUN apt-get update && apt-get install -y \
