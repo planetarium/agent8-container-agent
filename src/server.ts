@@ -30,6 +30,7 @@ import { CandidatePort } from "./portScanner";
 import { AuthManager } from './auth';
 import { setTimeout } from "node:timers/promises";
 import { MachinePool } from './fly/machinePool';
+import { ServiceError } from './errors';
 
 type WebSocketData = ProxyData | DirectConnectionData;
 
@@ -222,34 +223,45 @@ export class ContainerServer {
       routes: {
         "/api/machine": {
           POST: corsMiddleware(async (req: Request) => {
-            const token = this.authManager.extractTokenFromHeader(req.headers.get("authorization"));
-            if (!token) {
-              return Response.json({ error: "Missing authorization token" }, { status: 401 });
-            }
-
-            const userInfo = await this.authManager.verifyToken(token);
-            if (!userInfo) {
-              return Response.json({ error: "Invalid authorization token" }, { status: 401 });
-            }
-
-            if (!this.machinePool) {
-              return Response.json({ error: "Machine pool not initialized" }, { status: 500 });
-            }
-
-            // Get a machine from the pool
-            let machineId = await this.machinePool.getMachine(userInfo.userUid);
-
-            // If no machine is available, create a new one and assign it
-            if (!machineId) {
-              console.info(`[Machine Pool] No available machines, creating a new one for user ${userInfo.userUid}`);
-              machineId = await this.machinePool.createNewMachineWithUser(userInfo.userUid);
-
-              if (!machineId) {
-                return Response.json({ error: "Failed to create and assign new machine" }, { status: 503 });
+            try {
+              const token = this.authManager.extractTokenFromHeader(req.headers.get("authorization"));
+              if (!token) {
+                return Response.json({ error: "Missing authorization token" }, { status: 401 });
               }
-            }
 
-            return Response.json({ machine_id: machineId });
+              const userInfo = await this.authManager.verifyToken(token);
+
+              if (!this.machinePool) {
+                return Response.json({ error: "Machine pool not initialized" }, { status: 500 });
+              }
+
+              // Get a machine from the pool
+              let machineId = await this.machinePool.getMachine(userInfo.userUid);
+
+              // If no machine is available, create a new one and assign it
+              if (!machineId) {
+                console.info(`[Machine Pool] No available machines, creating a new one for user ${userInfo.userUid}`);
+                machineId = await this.machinePool.createNewMachineWithUser(userInfo.userUid);
+              }
+
+              return Response.json({ machine_id: machineId });
+
+            } catch (error) {
+              if (error instanceof ServiceError) {
+                const statusCode = error.isNetworkError ? 503 : error.statusCode;
+                return Response.json({
+                  error: error.message,
+                  service: error.service,
+                  available: !error.isNetworkError
+                }, { status: statusCode });
+              }
+
+              console.error("Unexpected error in POST /api/machine:", error);
+              return Response.json({
+                error: "Internal server error",
+                service: "internal"
+              }, { status: 500 });
+            }
           }),
           OPTIONS: corsMiddleware((req: Request) => {
             return new Response(null, { status: 204 });
@@ -257,41 +269,45 @@ export class ContainerServer {
         },
         "/api/machine/:id": {
           GET: corsMiddleware(async (req: Request) => {
-            const token = this.authManager.extractTokenFromHeader(req.headers.get("authorization"));
-
-            if (!token) {
-              return Response.json({ error: "Missing authorization token" }, { status: 401 });
-            }
-
-            const userInfo = await this.authManager.verifyToken(token);
-            if (!userInfo) {
-              return Response.json({ error: "Invalid authorization token" }, { status: 401 });
-            }
-
-            const machineId = (req as any).params.id;
-
             try {
+              const token = this.authManager.extractTokenFromHeader(req.headers.get("authorization"));
+
+              if (!token) {
+                return Response.json({ error: "Missing authorization token" }, { status: 401 });
+              }
+
+              const userInfo = await this.authManager.verifyToken(token);
+              const machineId = (req as any).params.id;
+
               const flyClient = await this.flyClientPromise;
 
               // Get machine status directly from Fly API
               const machine = await flyClient.getMachineStatus(machineId);
-              if (!machine) {
-                return Response.json({ error: "Machine not found" }, { status: 404 });
-              }
 
               // Get machine assignment information
-              const assignment = this.machinePool ? await this.machinePool.getMachineAssignment(machineId) : null;
+              const assignment = this.machinePool ? 
+                await this.machinePool.getMachineAssignment(machineId) : null;
 
               return Response.json({
                 success: true,
                 machine,
                 assignment
               });
+
             } catch (error) {
-              console.error("Error retrieving machine:", error);
+              if (error instanceof ServiceError) {
+                const statusCode = error.isNetworkError ? 503 : error.statusCode;
+                return Response.json({
+                  error: error.message,
+                  service: error.service,
+                  available: !error.isNetworkError
+                }, { status: statusCode });
+              }
+
+              console.error("Unexpected error in GET /api/machine/:id:", error);
               return Response.json({
-                error: "Error occurred while retrieving machine",
-                details: error instanceof Error ? error.message : "Unknown error"
+                error: "Internal server error",
+                service: "internal"
               }, { status: 500 });
             }
           }),

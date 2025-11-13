@@ -1,4 +1,5 @@
 import { createHash } from 'crypto';
+import { AuthError } from '../errors';
 
 interface AuthConfig {
   authServerUrl: string;
@@ -13,8 +14,9 @@ export class AuthManager {
   }
 
   async verifyToken(token: string): Promise<{ userUid: string, [key: string]: any }> {
-    if (!token)
-      throw new Error('Token is required');
+    if (!token) {
+      throw new AuthError('Token is required', 400);
+    }
 
     try {
       const response = await fetch(`${this.authServerUrl}/v1/auth/verify`, {
@@ -26,14 +28,29 @@ export class AuthManager {
       });
 
       if (!response.ok) {
-        throw new Error(`Token verification failed: ${response.statusText}`);
+        // 인증 서버의 실제 상태 코드를 전달
+        throw new AuthError(
+          `Token verification failed: ${response.statusText}`,
+          response.status
+        );
       }
 
       const userInfo = await response.json();
-      if (!userInfo.userUid) throw new Error(`userUid doesn't exist in the response`);
+      if (!userInfo.userUid) {
+        throw new AuthError(`userUid doesn't exist in the response`, 500);
+      }
       return userInfo;
     } catch (error) {
-      throw new Error(`Error verifying token: ${error}`);
+      // fetch 자체가 실패한 경우 (네트워크 오류, 타임아웃 등)
+      if (error instanceof AuthError) {
+        throw error;
+      }
+      // 네트워크 오류는 503 (Service Unavailable)로 처리
+      throw new AuthError(
+        `Authentication service unavailable: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        503,
+        true  // 네트워크 오류 플래그
+      );
     }
   }
 
