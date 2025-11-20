@@ -1,5 +1,6 @@
 import { FlyClient } from './client';
 import { PrismaClient, Prisma } from '@prisma/client';
+import { DatabaseError, FlyError } from '../errors';
 
 const prisma = new PrismaClient();
 
@@ -210,13 +211,12 @@ export class MachinePool {
   /**
    * Create a new machine and assign it to a user in a single transaction
    */
-  async createNewMachineWithUser(userId: string): Promise<string | null> {
+  async createNewMachineWithUser(userId: string): Promise<string> {
     try {
       const options = await this.getMachineCreationOptions();
       const machine = await this.flyClient.createMachine(options, 0);
       if (!machine || !machine.id) {
-        console.error('Failed to create new machine');
-        return null;
+        throw new Error('Failed to create new machine - no machine ID returned');
       }
 
       // Set metadata after machine creation
@@ -228,25 +228,36 @@ export class MachinePool {
       }
 
       // Create and assign machine in a single transaction
-      const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-        const created = await tx.machine_pool.create({
-          data: {
-            machine_id: machine.id,
-            ipv6: machine.private_ip || '',
-            deleted: false,
-            is_available: false,
-            assigned_to: userId,
-            assigned_at: new Date(),
-            created_at: new Date(machine.created_at || Date.now()),
-          }
+      try {
+        const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+          const created = await tx.machine_pool.create({
+            data: {
+              machine_id: machine.id,
+              ipv6: machine.private_ip || '',
+              deleted: false,
+              is_available: false,
+              assigned_to: userId,
+              assigned_at: new Date(),
+              created_at: new Date(machine.created_at || Date.now()),
+            }
+          });
+          return created.machine_id;
         });
-        return created.machine_id;
-      });
-
-      return result;
+        return result;
+      } catch (dbError) {
+        console.error('Database error creating machine assignment:', dbError);
+        throw new DatabaseError(
+          `Failed to save machine to database: ${dbError instanceof Error ? dbError.message : 'Unknown error'}`,
+          503
+        );
+      }
     } catch (error) {
+      // Propagate FlyError and DatabaseError as is
+      if (error instanceof FlyError || error instanceof DatabaseError) {
+        throw error;
+      }
       console.error('Error creating and assigning new machine:', error);
-      return null;
+      throw new Error(`Failed to create machine: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
@@ -292,15 +303,18 @@ export class MachinePool {
         return machineId;
       });
     } catch (error) {
-      console.error('Error getting machine from pool:', error);
-      return null;
+      console.error('Database error getting machine from pool:', error);
+      throw new DatabaseError(
+        `Failed to get machine from database: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        503
+      );
     }
   }
 
   /**
    * Get machine assignment information
    */
-  async getMachineAssignment(machineId: string): Promise<{ assigned_to: string | null; assigned_at: Date | null } | null> {
+  async getMachineAssignment(machineId: string): Promise<{ assigned_to: string | null; assigned_at: Date | null }> {
     try {
       return await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         const machine = await tx.machine_pool.findFirst({
@@ -321,11 +335,11 @@ export class MachinePool {
         };
       });
     } catch (error) {
-      console.error('Error getting machine assignment:', error);
-      return {
-        assigned_to: null,
-        assigned_at: null
-      };
+      console.error('Database error getting machine assignment:', error);
+      throw new DatabaseError(
+        `Failed to get machine assignment from database: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        503
+      );
     }
   }
 

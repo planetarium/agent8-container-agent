@@ -1,4 +1,5 @@
 import { FlyConfig, Machine, CreateMachineOptions } from './types';
+import { FlyError } from '../errors';
 
 export class FlyClient {
   private config: FlyConfig;
@@ -54,13 +55,22 @@ export class FlyClient {
           const randomIdx = Math.floor(Math.random() * this.fallbackRegions.length);
           return this.createMachine({ ...options, region: this.fallbackRegions[randomIdx] }, retry + 1);
         }
-        throw new Error(`HTTP ${res.status} - ${res.statusText}`);
+        throw new FlyError(`Failed to create machine: ${res.statusText}`, res.status);
       }
 
       return await res.json();
     } catch (e: unknown) {
-      console.error("Fly API error:", e instanceof Error ? e.message : e);
-      throw e;
+      // Propagate FlyError as is
+      if (e instanceof FlyError) {
+        throw e;
+      }
+      // Handle network errors as 503
+      console.error("Fly API network error:", e instanceof Error ? e.message : e);
+      throw new FlyError(
+        `Fly API unavailable: ${e instanceof Error ? e.message : 'Unknown error'}`,
+        503,
+        true
+      );
     }
   }
 
@@ -89,9 +99,10 @@ export class FlyClient {
   /**
    * Get real-time machine status from Fly API.
    * @param machineId - The ID of the machine to check
-   * @returns Machine details and current status or null if not found
+   * @returns Machine details and current status
+   * @throws FlyError if machine not found or API error occurs
    */
-  async getMachineStatus(machineId: string): Promise<Machine | null> {
+  async getMachineStatus(machineId: string): Promise<Machine> {
     try {
       const res = await fetch(`${this.config.baseUrl}/apps/${this.config.appName}/machines/${machineId}`, {
         method: "GET",
@@ -103,16 +114,24 @@ export class FlyClient {
 
       if (!res.ok) {
         if (res.status === 404) {
-          return null;
+          throw new FlyError(`Machine not found: ${machineId}`, 404);
         }
-        console.error(`HTTP ${res.status} - ${res.statusText}`);
-        return null;
+        throw new FlyError(`Failed to get machine status: ${res.statusText}`, res.status);
       }
 
       return await res.json() as Machine;
     } catch (e: unknown) {
-      console.error("Fly API error:", e instanceof Error ? e.message : e);
-      return null;
+      // Propagate FlyError as is
+      if (e instanceof FlyError) {
+        throw e;
+      }
+      // Handle network errors as 503
+      console.error("Fly API network error:", e instanceof Error ? e.message : e);
+      throw new FlyError(
+        `Fly API unavailable: ${e instanceof Error ? e.message : 'Unknown error'}`,
+        503,
+        true
+      );
     }
   }
 
