@@ -49,7 +49,7 @@ export class AuthManager {
       throw new AuthError(
         `Authentication service unavailable: ${error instanceof Error ? error.message : 'Unknown error'}`,
         503,
-        true  // 네트워크 오류 플래그
+        true  // Network error flag
       );
     }
   }
@@ -60,4 +60,4 @@ export class AuthManager {
     }
     return authHeader.replace(/^Bearer /, '');
   }
-} 
+}

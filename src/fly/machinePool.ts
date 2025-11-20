@@ -252,7 +252,7 @@ export class MachinePool {
         );
       }
     } catch (error) {
-      // FlyError와 DatabaseError는 그대로 전파
+      // Propagate FlyError and DatabaseError as is
       if (error instanceof FlyError || error instanceof DatabaseError) {
         throw error;
       }

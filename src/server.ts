@@ -276,7 +276,7 @@ export class ContainerServer {
                 return Response.json({ error: "Missing authorization token" }, { status: 401 });
               }
 
-              const userInfo = await this.authManager.verifyToken(token);
+              await this.authManager.verifyToken(token);
               const machineId = (req as any).params.id;
 
               const flyClient = await this.flyClientPromise;
@@ -285,7 +285,7 @@ export class ContainerServer {
               const machine = await flyClient.getMachineStatus(machineId);
 
               // Get machine assignment information
-              const assignment = this.machinePool ? 
+              const assignment = this.machinePool ?
                 await this.machinePool.getMachineAssignment(machineId) : null;
 
               return Response.json({

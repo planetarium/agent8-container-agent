@@ -60,11 +60,11 @@ export class FlyClient {
 
       return await res.json();
     } catch (e: unknown) {
-      // FlyError는 그대로 전파
+      // Propagate FlyError as is
       if (e instanceof FlyError) {
         throw e;
       }
-      // 네트워크 오류는 503으로 처리
+      // Handle network errors as 503
       console.error("Fly API network error:", e instanceof Error ? e.message : e);
       throw new FlyError(
         `Fly API unavailable: ${e instanceof Error ? e.message : 'Unknown error'}`,
@@ -121,11 +121,11 @@ export class FlyClient {
 
       return await res.json() as Machine;
     } catch (e: unknown) {
-      // FlyError는 그대로 전파
+      // Propagate FlyError as is
       if (e instanceof FlyError) {
         throw e;
       }
-      // 네트워크 오류는 503으로 처리
+      // Handle network errors as 503
       console.error("Fly API network error:", e instanceof Error ? e.message : e);
       throw new FlyError(
         `Fly API unavailable: ${e instanceof Error ? e.message : 'Unknown error'}`,
