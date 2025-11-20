@@ -2,6 +2,9 @@ FROM oven/bun:1.2.10 AS builder
 
 WORKDIR /app
 
+# Install OpenSSL for Prisma
+RUN apt-get update -y && apt-get install -y openssl && apt-get clean
+
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
 
