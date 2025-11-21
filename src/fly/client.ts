@@ -1,5 +1,6 @@
 import { FlyConfig, Machine, CreateMachineOptions } from './types';
 import { FlyError } from '../errors';
+import { retryWithBackoff } from '../utils/retry';
 
 export class FlyClient {
   private config: FlyConfig;
@@ -78,18 +79,35 @@ export class FlyClient {
    * Destroys a machine from the Fly API.
    */
   async destroyMachine(machineId: string): Promise<void> {
-    const res = await fetch(`${this.config.baseUrl}/apps/${this.config.appName}/machines/${machineId}?force=true`, {
-      method: "DELETE",
-      headers: {
-        Authorization: `Bearer ${this.config.apiToken}`,
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      }
-    });
+    return retryWithBackoff(
+      async () => {
+        const res = await fetch(`${this.config.baseUrl}/apps/${this.config.appName}/machines/${machineId}?force=true`, {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${this.config.apiToken}`,
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          }
+        });
 
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status} - ${res.statusText}`);
-    }
+        if (!res.ok) {
+          throw new FlyError(`HTTP ${res.status} - ${res.statusText}`, res.status);
+        }
+      },
+      {
+        maxRetries: this.RETRY_LIMIT,
+        shouldRetry: (error) => {
+          // Don't retry 404 errors (machine already deleted)
+          if (error instanceof FlyError && error.statusCode === 404) {
+            return false;
+          }
+          return true;
+        },
+        onRetry: (error, attempt, delay) => {
+          console.warn(`[FlyClient] destroyMachine retry attempt ${attempt + 1}/${this.RETRY_LIMIT}, waiting ${delay}ms...`);
+        }
+      }
+    );
   }
 
   getImageRef(): string | undefined {
@@ -103,36 +121,53 @@ export class FlyClient {
    * @throws FlyError if machine not found or API error occurs
    */
   async getMachineStatus(machineId: string): Promise<Machine> {
-    try {
-      const res = await fetch(`${this.config.baseUrl}/apps/${this.config.appName}/machines/${machineId}`, {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${this.config.apiToken}`,
-          Accept: "application/json",
-        },
-      });
+    return retryWithBackoff(
+      async () => {
+        try {
+          const res = await fetch(`${this.config.baseUrl}/apps/${this.config.appName}/machines/${machineId}`, {
+            method: "GET",
+            headers: {
+              Authorization: `Bearer ${this.config.apiToken}`,
+              Accept: "application/json",
+            },
+          });
 
-      if (!res.ok) {
-        if (res.status === 404) {
-          throw new FlyError(`Machine not found: ${machineId}`, 404);
+          if (!res.ok) {
+            if (res.status === 404) {
+              throw new FlyError(`Machine not found: ${machineId}`, 404);
+            }
+            throw new FlyError(`Failed to get machine status: ${res.statusText}`, res.status);
+          }
+
+          return await res.json() as Machine;
+        } catch (e: unknown) {
+          // Propagate FlyError as is
+          if (e instanceof FlyError) {
+            throw e;
+          }
+          // Handle network errors as 503
+          console.error("Fly API network error:", e instanceof Error ? e.message : e);
+          throw new FlyError(
+            `Fly API unavailable: ${e instanceof Error ? e.message : 'Unknown error'}`,
+            503,
+            true
+          );
         }
-        throw new FlyError(`Failed to get machine status: ${res.statusText}`, res.status);
+      },
+      {
+        maxRetries: this.RETRY_LIMIT,
+        shouldRetry: (error) => {
+          // Don't retry 404 errors
+          if (error instanceof FlyError && error.statusCode === 404) {
+            return false;
+          }
+          return true;
+        },
+        onRetry: (error, attempt, delay) => {
+          console.warn(`[FlyClient] getMachineStatus retry attempt ${attempt + 1}/${this.RETRY_LIMIT}, waiting ${delay}ms...`);
+        }
       }
-
-      return await res.json() as Machine;
-    } catch (e: unknown) {
-      // Propagate FlyError as is
-      if (e instanceof FlyError) {
-        throw e;
-      }
-      // Handle network errors as 503
-      console.error("Fly API network error:", e instanceof Error ? e.message : e);
-      throw new FlyError(
-        `Fly API unavailable: ${e instanceof Error ? e.message : 'Unknown error'}`,
-        503,
-        true
-      );
-    }
+    );
   }
 
   /**
@@ -141,49 +176,93 @@ export class FlyClient {
    * @param metadata - The metadata to set
    */
   async updateMachineMetadata(machineId: string, key: string, value: string): Promise<void> {
-    try {
-      const res = await fetch(
-        `${this.config.baseUrl}/apps/${this.config.appName}/machines/${machineId}/metadata/${key}`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${this.config.apiToken}`,
-            Accept: "application/json",
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ value }),
-        }
-      );
+    return retryWithBackoff(
+      async () => {
+        try {
+          const res = await fetch(
+            `${this.config.baseUrl}/apps/${this.config.appName}/machines/${machineId}/metadata/${key}`,
+            {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${this.config.apiToken}`,
+                Accept: "application/json",
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({ value }),
+            }
+          );
 
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status} - ${res.statusText}`);
+          if (!res.ok) {
+            throw new FlyError(`HTTP ${res.status} - ${res.statusText}`, res.status);
+          }
+        } catch (e: unknown) {
+          if (e instanceof FlyError) {
+            throw e;
+          }
+          console.error("Fly API error (updateMachineMetadata):", e instanceof Error ? e.message : e);
+          throw new FlyError(
+            `Fly API unavailable: ${e instanceof Error ? e.message : 'Unknown error'}`,
+            503,
+            true
+          );
+        }
+      },
+      {
+        maxRetries: this.RETRY_LIMIT,
+        shouldRetry: (error) => {
+          // Don't retry 404 errors (machine doesn't exist)
+          if (error instanceof FlyError && error.statusCode === 404) {
+            return false;
+          }
+          return true;
+        },
+        onRetry: (error, attempt, delay) => {
+          console.warn(`[FlyClient] updateMachineMetadata retry attempt ${attempt + 1}/${this.RETRY_LIMIT}, waiting ${delay}ms...`);
+        }
       }
-    } catch (e: unknown) {
-      console.error("Fly API error (updateMachineMetadata):", e instanceof Error ? e.message : e);
-      throw e;
-    }
+    );
   }
 
   /**
    * Returns the list of actual machines from the Fly API.
    */
   async listFlyMachines(): Promise<any[]> {
-    try {
-      const res = await fetch(`${this.config.baseUrl}/apps/${this.config.appName}/machines`, {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${this.config.apiToken}`,
-          Accept: "application/json",
-        },
-      });
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status} - ${res.statusText}`);
+    return retryWithBackoff(
+      async () => {
+        try {
+          const res = await fetch(`${this.config.baseUrl}/apps/${this.config.appName}/machines`, {
+            method: "GET",
+            headers: {
+              Authorization: `Bearer ${this.config.apiToken}`,
+              Accept: "application/json",
+            },
+          });
+          if (!res.ok) {
+            throw new FlyError(`HTTP ${res.status} - ${res.statusText}`, res.status);
+          }
+          return await res.json();
+        } catch (e: unknown) {
+          if (e instanceof FlyError) {
+            throw e;
+          }
+          console.error("Fly API error (listFlyMachines):", e instanceof Error ? e.message : e);
+          throw new FlyError(
+            `Fly API unavailable: ${e instanceof Error ? e.message : 'Unknown error'}`,
+            503,
+            true
+          );
+        }
+      },
+      {
+        maxRetries: this.RETRY_LIMIT,
+        onRetry: (error, attempt, delay) => {
+          console.warn(`[FlyClient] listFlyMachines retry attempt ${attempt + 1}/${this.RETRY_LIMIT}, waiting ${delay}ms...`);
+        }
       }
-      return await res.json();
-    } catch (e: unknown) {
-      console.error("Fly API error (listFlyMachines):", e instanceof Error ? e.message : e);
+    ).catch((e: unknown) => {
+      console.error("Fly API error (listFlyMachines) - returning empty array after retries:", e instanceof Error ? e.message : e);
       return [];
-    }
+    });
   }
 
   /**
@@ -192,27 +271,46 @@ export class FlyClient {
    * @returns The machine's metadata or null if not found
    */
   async getMachineMetadata(machineId: string): Promise<Record<string, string> | null> {
-    try {
-      const res = await fetch(`${this.config.baseUrl}/apps/${this.config.appName}/machines/${machineId}/metadata`, {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${this.config.apiToken}`,
-          Accept: "application/json",
-        },
-      });
+    return retryWithBackoff(
+      async () => {
+        try {
+          const res = await fetch(`${this.config.baseUrl}/apps/${this.config.appName}/machines/${machineId}/metadata`, {
+            method: "GET",
+            headers: {
+              Authorization: `Bearer ${this.config.apiToken}`,
+              Accept: "application/json",
+            },
+          });
 
-      if (!res.ok) {
-        if (res.status === 404) {
-          return null;
+          if (!res.ok) {
+            if (res.status === 404) {
+              return null;
+            }
+            throw new FlyError(`HTTP ${res.status} - ${res.statusText}`, res.status);
+          }
+
+          return await res.json();
+        } catch (e: unknown) {
+          if (e instanceof FlyError) {
+            throw e;
+          }
+          console.error("Fly API error (getMachineMetadata):", e instanceof Error ? e.message : e);
+          throw new FlyError(
+            `Fly API unavailable: ${e instanceof Error ? e.message : 'Unknown error'}`,
+            503,
+            true
+          );
         }
-        console.error(`HTTP ${res.status} - ${res.statusText}`);
-        return null;
+      },
+      {
+        maxRetries: this.RETRY_LIMIT,
+        onRetry: (error, attempt, delay) => {
+          console.warn(`[FlyClient] getMachineMetadata retry attempt ${attempt + 1}/${this.RETRY_LIMIT}, waiting ${delay}ms...`);
+        }
       }
-
-      return await res.json();
-    } catch (e: unknown) {
-      console.error("Fly API error (getMachineMetadata):", e instanceof Error ? e.message : e);
+    ).catch((e: unknown) => {
+      console.error("Fly API error (getMachineMetadata) - returning null after retries:", e instanceof Error ? e.message : e);
       return null;
-    }
+    });
   }
 }
