@@ -10,7 +10,7 @@ export interface RetryOptions {
 /**
  * Retry a function with exponential backoff strategy
  * @param fn - The async function to retry
- * @param options - Retry configuration options
+ * @param options - Retry configuration options (defaults: maxRetries=3, initialDelayMs=1000, maxDelayMs=10000, backoffMultiplier=2)
  * @returns Promise that resolves with the function result
  * @throws The last error if all retries fail
  */

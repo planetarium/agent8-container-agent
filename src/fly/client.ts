@@ -225,6 +225,8 @@ export class FlyClient {
 
   /**
    * Returns the list of actual machines from the Fly API.
+   * @returns Array of machines (empty array if no machines exist)
+   * @throws FlyError if API call fails after all retries (network error or 5xx)
    */
   async listFlyMachines(): Promise<any[]> {
     return retryWithBackoff(
@@ -259,16 +261,14 @@ export class FlyClient {
           console.warn(`[FlyClient] listFlyMachines retry attempt ${attempt + 1}/${this.RETRY_LIMIT}, waiting ${delay}ms...`);
         }
       }
-    ).catch((e: unknown) => {
-      console.error("Fly API error (listFlyMachines) - returning empty array after retries:", e instanceof Error ? e.message : e);
-      return [];
-    });
+    );
   }
 
   /**
    * Get machine metadata
    * @param machineId - The ID of the machine to get metadata for
-   * @returns The machine's metadata or null if not found
+   * @returns The machine's metadata or null if machine not found (404)
+   * @throws FlyError if API call fails after all retries (network error or 5xx)
    */
   async getMachineMetadata(machineId: string): Promise<Record<string, string> | null> {
     return retryWithBackoff(
@@ -304,13 +304,17 @@ export class FlyClient {
       },
       {
         maxRetries: this.RETRY_LIMIT,
+        shouldRetry: (error) => {
+          // Don't retry 404 errors (machine doesn't exist)
+          if (error instanceof FlyError && error.statusCode === 404) {
+            return false;
+          }
+          return true;
+        },
         onRetry: (error, attempt, delay) => {
           console.warn(`[FlyClient] getMachineMetadata retry attempt ${attempt + 1}/${this.RETRY_LIMIT}, waiting ${delay}ms...`);
         }
       }
-    ).catch((e: unknown) => {
-      console.error("Fly API error (getMachineMetadata) - returning null after retries:", e instanceof Error ? e.message : e);
-      return null;
-    });
+    );
   }
 }
