@@ -31,6 +31,7 @@ import { AuthManager } from './auth';
 import { setTimeout } from "node:timers/promises";
 import { MachinePool } from './fly/machinePool';
 import { ServiceError } from './errors';
+import { retryWithBackoff } from './utils/retry';
 
 type WebSocketData = ProxyData | DirectConnectionData;
 
@@ -223,30 +224,68 @@ export class ContainerServer {
       routes: {
         "/api/machine": {
           POST: corsMiddleware(async (req: Request) => {
-            try {
-              const token = this.authManager.extractTokenFromHeader(req.headers.get("authorization"));
-              if (!token) {
-                return Response.json({ error: "Missing authorization token" }, { status: 401 });
+            return await retryWithBackoff(
+              async () => {
+                try {
+                  const token = this.authManager.extractTokenFromHeader(req.headers.get("authorization"));
+                  if (!token) {
+                    // Don't retry auth errors
+                    throw new ServiceError("Missing authorization token", 401, 'auth-server');
+                  }
+
+                  const userInfo = await this.authManager.verifyToken(token);
+
+                  if (!this.machinePool) {
+                    throw new Error("Machine pool not initialized");
+                  }
+
+                  // Get a machine from the pool
+                  let machineId = await this.machinePool.getMachine(userInfo.userUid);
+
+                  // If no machine is available, create a new one and assign it
+                  if (!machineId) {
+                    console.info(`[Machine Pool] No available machines, creating a new one for user ${userInfo.userUid}`);
+                    machineId = await this.machinePool.createNewMachineWithUser(userInfo.userUid);
+                  }
+
+                  return Response.json({ machine_id: machineId });
+
+                } catch (error) {
+                  // Propagate ServiceError to be handled by retry logic
+                  if (error instanceof ServiceError) {
+                    throw error;
+                  }
+
+                  // Wrap other errors
+                  console.error("Unexpected error in POST /api/machine:", error);
+                  throw new ServiceError(
+                    error instanceof Error ? error.message : "Internal server error",
+                    500,
+                    'internal'
+                  );
+                }
+              },
+              {
+                maxRetries: 3,
+                shouldRetry: (error, attempt) => {
+                  // Don't retry 4xx errors (including auth errors)
+                  if (error instanceof ServiceError && error.statusCode >= 400 && error.statusCode < 500) {
+                    return false;
+                  }
+                  // Retry network errors and 5xx errors
+                  if (error instanceof ServiceError && (error.isNetworkError || error.statusCode >= 500)) {
+                    return true;
+                  }
+                  // Retry other errors
+                  return true;
+                },
+                onRetry: (error, attempt, delay) => {
+                  console.warn(`[Machine API] Retry attempt ${attempt + 1}/3, waiting ${delay}ms...`,
+                    error instanceof Error ? error.message : error);
+                }
               }
-
-              const userInfo = await this.authManager.verifyToken(token);
-
-              if (!this.machinePool) {
-                return Response.json({ error: "Machine pool not initialized" }, { status: 500 });
-              }
-
-              // Get a machine from the pool
-              let machineId = await this.machinePool.getMachine(userInfo.userUid);
-
-              // If no machine is available, create a new one and assign it
-              if (!machineId) {
-                console.info(`[Machine Pool] No available machines, creating a new one for user ${userInfo.userUid}`);
-                machineId = await this.machinePool.createNewMachineWithUser(userInfo.userUid);
-              }
-
-              return Response.json({ machine_id: machineId });
-
-            } catch (error) {
+            ).catch((error) => {
+              // Final error handling after all retries
               if (error instanceof ServiceError) {
                 const statusCode = error.isNetworkError ? 503 : error.statusCode;
                 return Response.json({
@@ -256,12 +295,12 @@ export class ContainerServer {
                 }, { status: statusCode });
               }
 
-              console.error("Unexpected error in POST /api/machine:", error);
+              console.error("Unexpected error in POST /api/machine after retries:", error);
               return Response.json({
                 error: "Internal server error",
                 service: "internal"
               }, { status: 500 });
-            }
+            });
           }),
           OPTIONS: corsMiddleware((req: Request) => {
             return new Response(null, { status: 204 });
