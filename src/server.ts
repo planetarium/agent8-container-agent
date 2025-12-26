@@ -722,9 +722,9 @@ export class ContainerServer {
           const content =
             typeof operation.content === "string"
               ? operation.content
-              : new TextDecoder().decode(operation.content);
+              : Buffer.from(operation.content);
           await writeFile(fullPath, content, {
-            encoding: (operation.options?.encoding as BufferEncoding) || "utf-8",
+            encoding: operation.options?.encoding as BufferEncoding | undefined,
           });
           await chown(fullPath, this.agentUid, this.agentUid);
           return { success: true, data: null };
